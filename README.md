@@ -34,6 +34,11 @@ The security principle is simple: **the identity that creates backups does not r
 - Guided browser setup for non-IT operators: test/add hypervisors, discover/check VMs, add/test/init storage, stage/map DR, preview/prepare VXLAN/OSPF, health-check and start backup schedules.
 - Per-platform Proxmox/XCP-ng SSH key references, so primary and DR hosts can use different credentials.
 
+
+### v0.6 audit-first dashboard
+
+The guided console puts **RPO Status** and **Immutable-Copy Verification** at the top of the page. The RPO target is stored in the same validated `protection.rpo_target_minutes` schema used by CLI automation. Immutable-copy verification confirms that the recovery snapshot is still visible at the selected repository and that the configured append-only/Object-Lock/Bucket-Lock retention is active; results are written back to the recovery-copy catalog for audit visibility.
+
 ## Recommended production topology
 
 ```text

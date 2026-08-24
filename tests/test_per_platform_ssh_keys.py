@@ -1,3 +1,5 @@
+import os
+
 from immutavault.config import PlatformConfig
 from immutavault.adapters.proxmox import ProxmoxAdapter
 from immutavault.adapters.xcpng import XCPNGAdapter
