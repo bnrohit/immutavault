@@ -21,13 +21,6 @@ from .vmware import VMwareAdapter
 
 
 INCREMENTAL_MODES = {"auto", "cbt", "vddk", "vddk-cbt"}
-INVALIDATING_REASONS = {
-    "cbt_disabled",
-    "cbt_invalid",
-    "change_id_reset",
-    "invalid_change_id",
-    "unsupported_disk",
-}
 
 
 class VMwareIncrementalAdapter(VMwareAdapter):
@@ -58,6 +51,11 @@ class VMwareIncrementalAdapter(VMwareAdapter):
         return base / safe_component(self.cfg.name) / safe_component(vm.name)
 
     @staticmethod
+    def _secure_parent(path: Path) -> None:
+        path.mkdir(parents=True, exist_ok=True)
+        os.chmod(path, 0o700)
+
+    @staticmethod
     def _snapshot_view(cache: Path, target: Path) -> None:
         shutil.rmtree(target, ignore_errors=True)
         target.mkdir(parents=True, exist_ok=True)
@@ -67,6 +65,7 @@ class VMwareIncrementalAdapter(VMwareAdapter):
             dst = target / rel
             if src.is_dir():
                 dst.mkdir(parents=True, exist_ok=True)
+                os.chmod(dst, 0o700)
                 continue
             if not src.is_file():
                 continue
@@ -129,7 +128,7 @@ class VMwareIncrementalAdapter(VMwareAdapter):
             )
 
         cache = self._cache_root(vm)
-        cache.parent.mkdir(parents=True, exist_ok=True)
+        self._secure_parent(cache.parent)
         try:
             result = provider.backup(
                 platform_name=self.cfg.name,
@@ -143,8 +142,12 @@ class VMwareIncrementalAdapter(VMwareAdapter):
             self._snapshot_view(result.path, target)
             return target
         except IncrementalTransportError as exc:
-            if exc.reason in INVALIDATING_REASONS:
-                shutil.rmtree(cache, ignore_errors=True)
+            # A provider error can occur after it has already touched one or
+            # more cached blocks. Unless the provider completed successfully we
+            # cannot prove that cache represents one VMware point in time, so
+            # discard it for *every* provider failure. The next native attempt
+            # starts from a fresh baseline rather than trusting partial state.
+            shutil.rmtree(cache, ignore_errors=True)
             if not self._fallback_allowed() or not exc.fallback_safe:
                 raise RuntimeError(
                     f"native VMware incremental backup failed ({exc.reason}) and cannot safely fall back: {exc}"
@@ -156,8 +159,10 @@ class VMwareIncrementalAdapter(VMwareAdapter):
                 "mode": "fallback-full",
                 "fallback_reason": exc.reason,
                 "fallback_error": str(exc),
+                "native_cache_invalidated": True,
             }
             (fallback / TRANSPORT_FILE).write_text(json.dumps(marker, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            os.chmod(fallback / TRANSPORT_FILE, 0o600)
             return fallback
 
     def restore(self, source: Path, *, target_name: str, options: dict[str, Any], dry_run: bool = False) -> dict[str, Any]:
