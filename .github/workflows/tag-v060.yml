@@ -1,0 +1,33 @@
+name: One-time v0.6.0 tag
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    if: github.event.pull_request.head.ref == 'release/tag-v0.6.0'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Create immutable release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          target='6b9bea4442ca5836248fb2246c71db1519ab5897'
+          existing="$(git ls-remote --tags origin refs/tags/v0.6.0 | awk '{print $1}')"
+          if [[ -n "$existing" ]]; then
+            if [[ "$existing" != "$target" ]]; then
+              echo "v0.6.0 already points to $existing, expected $target" >&2
+              exit 1
+            fi
+            echo 'v0.6.0 already points to the verified release commit.'
+            exit 0
+          fi
+          git tag v0.6.0 "$target"
+          git push origin refs/tags/v0.6.0
