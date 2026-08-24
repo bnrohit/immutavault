@@ -131,7 +131,7 @@ def test_remote_setup_console_requires_tls(tmp_path):
 
 
 def test_ui_exposes_guided_safe_flow():
-    for text in ("1. Add a hypervisor", "2. Choose VMs to protect", "3. Add storage or cloud", "4. Configure disaster-recovery site", "5. Test and start protection"):
+    for text in ("1. Hypervisor", "2. Select VMs", "3. Storage / Cloud", "4. DR site and network", "5. Test and start"):
         assert text in sc.UI
     assert "APPLY DR NETWORK" in sc.UI
     assert "Automatic DR failover stays OFF" in sc.UI
