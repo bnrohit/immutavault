@@ -2,11 +2,15 @@ name: publish-tested-v0.5.0
 on:
   push:
     branches: [main]
+  pull_request:
+    types: [opened, synchronize]
 permissions:
   contents: write
 jobs:
   publish:
-    if: ${{ github.event.head_commit.message == 'Bootstrap exact tested Immutavault v0.5.0' }}
+    if: >-
+      (github.event_name == 'push' && github.event.head_commit.message == 'Bootstrap exact tested Immutavault v0.5.0') ||
+      (github.event_name == 'pull_request' && github.event.pull_request.title == 'Publish exact tested Immutavault v0.5.0')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
