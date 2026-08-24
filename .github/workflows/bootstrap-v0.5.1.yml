@@ -1,0 +1,36 @@
+name: publish-tested-v0.5.1
+on:
+  pull_request:
+    types: [opened, synchronize]
+permissions:
+  contents: write
+jobs:
+  publish:
+    if: ${{ github.event.pull_request.title == 'Publish exact tested Immutavault v0.5.1' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify exact audited source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'b0c3f71cc277700e5ac74426371355ab792eacfa72719df40dbe21bf95de5648  .bootstrap/immutavault-v0.5.1-git-tree.tar.gz' | sha256sum -c -
+      - name: Publish v0.5.1 source while preserving workflow permission boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp .github/workflows/ci.yml /tmp/ci.yml
+          cp .github/workflows/bootstrap-v0.5.1.yml /tmp/bootstrap.yml
+          cp .bootstrap/immutavault-v0.5.1-git-tree.tar.gz /tmp/release.tar.gz
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          tar -xzf /tmp/release.tar.gz -C .
+          cp /tmp/ci.yml .github/workflows/ci.yml
+          cp /tmp/bootstrap.yml .github/workflows/bootstrap-v0.5.1.yml
+          rm -rf .bootstrap
+          git config user.name 'Immutavault Release Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add -A
+          git commit -m 'Publish Immutavault v0.5.1 audited source payload'
+          git push origin HEAD:main
