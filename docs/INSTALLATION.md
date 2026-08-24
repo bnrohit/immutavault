@@ -1,6 +1,6 @@
 # Installation and first production run
 
-Immutavault can run either on a dedicated physical Linux server or inside a Linux VM. The same software is used in both cases.
+Immutavault can run on a dedicated physical Linux server or inside a Linux VM. The same software is used in both cases.
 
 ## Recommended choices
 
@@ -14,7 +14,9 @@ Immutavault can run either on a dedicated physical Linux server or inside a Linu
 - Python 3.10+.
 - restic.
 - rest-server for the primary append-only REST vault role.
-- SSH for Proxmox/XCP-ng adapters; `govc` for the VMware fallback adapter.
+- SSH for Proxmox/XCP-ng adapters.
+- `govc` for VMware inventory/full hot-clone workflows and recovery checks.
+- For native VMware VDDK/CBT: an externally installed, authorized `immutavault-vddk` helper/provider implementing protocol version 1. Broadcom VDDK is not bundled by Immutavault.
 - Reliable storage mounted before Immutavault services start.
 
 ## 1. Prepare the host
@@ -31,13 +33,13 @@ The installer never partitions or formats a disk.
 
 ## 2. Choose the role
 
-Full appliance (controller + repository on one Linux server):
+Full appliance:
 
 ```bash
-sudo ./scripts/install.sh --role all
+sudo ./scripts/install.sh --role all --repo-root /srv/immutavault
 ```
 
-Controller-only VM (repository lives elsewhere):
+Controller-only VM:
 
 ```bash
 sudo ./scripts/install.sh --role controller
@@ -49,18 +51,18 @@ Repository-only vault:
 sudo ./scripts/install.sh --role repository --repo-root /srv/immutavault
 ```
 
-For `all` or `repository` roles, the top-level installer installs pinned `rest-server` v0.14.0 from the official upstream release **only after SHA-256 verification** when no compatible daemon is present. Existing binaries are capability-gated and must be v0.14.0+ with `--append-only`, authenticated TLS, `--tls-min-ver`, and htpasswd support. Use `--no-rest-server-download` for offline/change-controlled environments and provide a compatible binary yourself.
+For `all` or `repository` roles, the installer installs pinned rest-server v0.14.0 from the official upstream release only after SHA-256 verification when no compatible daemon is present. Existing binaries are capability-gated and must support append-only mode, authenticated TLS, TLS minimum-version control and htpasswd authentication. Use `--no-rest-server-download` for offline/change-controlled environments.
 
 ## 3. Mount storage
 
 Examples:
 
-- local XFS/ext4/ZFS: mount at `/srv/immutavault`;
-- TrueNAS/Dell NFS: mount the export at `/srv/immutavault` or configure it as a replica;
-- SMB/CIFS: mount with a root-owned credential file and restrictive permissions;
-- S3: no filesystem mount is required; configure it under `replicas:`.
+- local XFS/ext4/ZFS at `/srv/immutavault`;
+- TrueNAS/Dell NFS mounted at `/srv/immutavault` or configured as a replica;
+- SMB/CIFS mounted with a root-owned credential file and restrictive permissions;
+- S3 configured directly under `replicas:`.
 
-Verify the mount before continuing:
+Verify mounts before continuing:
 
 ```bash
 findmnt /srv/immutavault
@@ -79,9 +81,34 @@ Secrets stay in `/etc/immutavault/immutavault.env` with mode 0640 and are not co
 
 Enable one hypervisor at a time. Use include/exclude patterns so the first backup scope is explicit.
 
+### VMware strict native incremental setup
+
+For enterprise VMware deployments requiring genuine native incrementals, install the authorized helper separately, then start from `config/vmware-incremental.example.yml`.
+
+Recommended policy:
+
+```yaml
+mode: vddk
+options:
+  vddk_helper: /usr/local/bin/immutavault-vddk
+  incremental_strict: true
+  incremental_fallback: false
+  incremental_cache_root: /var/cache/immutavault/vddk
+  quiesce: true
+  quiesce_fallback_crash_consistent: false
+  vddk_transport_order:
+    - san
+    - hotadd
+    - nbdssl
+```
+
+Ensure the helper is executable by the Immutavault service identity and that the cache parent is on storage with adequate capacity and permissions. The cache contains recoverable guest data and must remain protected.
+
+Strict mode intentionally fails backup when VDDK/CBT is unavailable, unsafe or ambiguous. It never silently converts the job into a hot-clone/OVF recovery point.
+
 ## 5. Validate before scheduling
 
-All four commands should succeed:
+All commands should succeed for the intended production policy:
 
 ```bash
 immutavault hardware
@@ -99,9 +126,11 @@ sudo -u immutavault bash -c \
    immutavault --config /etc/immutavault/immutavault.yml backup --all --dry-run'
 ```
 
+For strict VMware incremental protection, deliberately test at least one failure condition on a disposable VM/environment—such as temporarily removing helper availability—and confirm dry-run/backup fails rather than reporting hot-clone fallback.
+
 ## 6. Perform the first real backup
 
-Start with one non-critical VM using an include filter, then:
+Start with one non-critical VM using an include filter:
 
 ```bash
 sudo -u immutavault bash -c \
@@ -114,17 +143,22 @@ Confirm:
 ```bash
 immutavault --config /etc/immutavault/immutavault.yml recovery-points
 immutavault --config /etc/immutavault/immutavault.yml status
-```
-
-Perform a full staging verification of that point before adding production workloads:
-
-```bash
 immutavault --config /etc/immutavault/immutavault.yml verify-point --snapshot SNAPSHOT_ID
 ```
 
-## 7. Enable recurring services
+For VMware VDDK/CBT, perform a second backup after changing test data and retain provider telemetry showing changed bytes/source bytes read. This proves the path is operating incrementally rather than merely completing a baseline.
 
-Only after the validation and a test restore pass:
+## 7. Prove restore
+
+A backup is not accepted as production-ready until a VM has been restored into an isolated network and booted successfully.
+
+Native VMware VDDK/CBT recovery points require the authorized provider/helper to be available for restore. Immutavault refuses implicit overwrite of an existing target VM.
+
+See `docs/RESTORE.md` and `docs/PRODUCTION_ACCEPTANCE.md`.
+
+## 8. Enable recurring services
+
+Only after validation and a test restore pass:
 
 ```bash
 sudo systemctl enable --now immutavault-rest-server.service
@@ -144,9 +178,9 @@ systemctl list-timers 'immutavault-*'
 journalctl -u immutavault-backup.service -n 100 --no-pager
 ```
 
-## 8. Configure off-site immutable copy
+## 9. Configure off-site immutable copy
 
-Enable one S3/NAS target in `replicas:` and initialize it:
+Enable at least one S3/NAS target in `replicas:` and initialize it:
 
 ```bash
 immutavault --config /etc/immutavault/immutavault.yml replica-init --name wasabi-immutable
@@ -154,8 +188,23 @@ immutavault --config /etc/immutavault/immutavault.yml replica-lock-init --name w
 immutavault --config /etc/immutavault/immutavault.yml storage-targets
 ```
 
-Use a separate cloud account/credential boundary from the hypervisor admins whenever possible.
+Use a separate cloud account/credential boundary from hypervisor administrators whenever possible.
 
-## 9. Prove restore
+## Upgrade an existing server to v0.7.1
 
-A backup is not accepted as production-ready until a VM has been restored into an isolated network and booted successfully. See `docs/RESTORE.md`.
+```bash
+cd /opt/immutavault
+git fetch --all --tags
+git checkout v0.7.1
+cat VERSION
+sudo ./scripts/preflight.sh
+./scripts/release_check.sh
+```
+
+Expected version output:
+
+```text
+0.7.1
+```
+
+Do not switch an existing VMware job from a full transport to strict VDDK/CBT until the helper/provider, initial baseline, second incremental run and isolated restore have all passed acceptance testing.

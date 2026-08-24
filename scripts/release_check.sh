@@ -23,11 +23,36 @@ import re
 version = Path('VERSION').read_text().strip()
 init = Path('src/immutavault/__init__.py').read_text()
 pyproject = Path('pyproject.toml').read_text()
+readme = Path('README.md').read_text()
+vmware_doc = Path('docs/VMWARE_BACKUP.md').read_text()
+incremental_example = Path('config/vmware-incremental.example.yml').read_text()
+
 assert f'__version__ = "{version}"' in init
 assert re.search(r'^version = "' + re.escape(version) + r'"$', pyproject, re.M)
+
+# Release-facing operator documentation must never lag VERSION again. A stale
+# README can send an operator to an older tag or to the wrong VMware transport.
+assert readme.startswith(f'# Immutavault v{version}\n'), 'README release heading is stale'
+assert f'git checkout v{version}' in readme, 'README install command is not pinned to current VERSION'
+assert 'incremental_strict: true' in readme
+assert 'incremental_fallback: false' in readme
+assert 'Broadcom VDDK' in readme and 'not bundled' in readme.lower()
+
+# The canonical VMware runbook and example must preserve the strict production
+# contract introduced in v0.7.1.
+for token in (
+    'incremental_strict: true',
+    'incremental_fallback: false',
+    'fail closed',
+    'fallback_safe',
+):
+    assert token in vmware_doc, f'VMware runbook missing required policy token: {token}'
+assert 'mode: "vddk"' in incremental_example, 'VMware example is not pinned to native vddk mode'
+assert 'incremental_strict: true' in incremental_example
+assert 'incremental_fallback: false' in incremental_example
 print(version)
 PY
-pass "version metadata consistent: $VERSION"
+pass "version/release documentation consistent: $VERSION"
 
 # Never ship runtime secrets, TLS private keys, catalogs, or backup payloads.
 # `git archive` source packages intentionally have no .git directory, so support both
