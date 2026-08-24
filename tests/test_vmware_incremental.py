@@ -109,7 +109,7 @@ def test_unsafe_incremental_error_never_falls_back(tmp_path, monkeypatch):
     monkeypatch.setattr(adapter, "_provider", lambda: FailingProvider("ambiguous_provider_state", False))
     fallback = FakeFallback()
     monkeypatch.setattr(adapter, "_fallback_adapter", lambda: fallback)
-    with pytest.raises(RuntimeError, match="cannot safely fall back"):
+    with pytest.raises(RuntimeError, match="failed closed"):
         adapter.export(VM(id="vm-1", name="sql01"), tmp_path / "staging")
     assert fallback.called is False
 
@@ -120,7 +120,7 @@ def test_strict_mode_reports_missing_native_provider(tmp_path, monkeypatch):
     adapter = VMwareIncrementalAdapter(cfg(tmp_path, incremental_strict=True, vddk_helper=str(tmp_path / "missing")), 60)
     monkeypatch.setattr(adapter, "_fallback_adapter", lambda: FakeFallback())
     problems = adapter.doctor()
-    assert any("native VMware incremental transport is required" in p for p in problems)
+    assert any("strict mode is enabled" in p and "no fallback is permitted" in p for p in problems)
 
 
 def test_reused_manifest_does_not_hash_previous_manifest(tmp_path):

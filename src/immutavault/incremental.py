@@ -21,7 +21,7 @@ LAYOUT_FILE = "immutavault-vddk-layout.json"
 class IncrementalTransportError(RuntimeError):
     """A native incremental provider could not safely complete the request."""
 
-    def __init__(self, message: str, *, reason: str = "provider_error", fallback_safe: bool = True) -> None:
+    def __init__(self, message: str, *, reason: str = "provider_error", fallback_safe: bool = False) -> None:
         super().__init__(message)
         self.reason = reason
         self.fallback_safe = fallback_safe
@@ -130,6 +130,7 @@ class VDDKProvider:
             raise IncrementalTransportError(
                 f"VDDK/CBT provider unavailable: {caps.get('reason')}",
                 reason=str(caps.get("reason") or "provider_unavailable"),
+                fallback_safe=False,
             )
         helper = str(caps["helper"])
         self._secure_dir(destination)
@@ -160,7 +161,9 @@ class VDDKProvider:
         if result.returncode != 0 or payload.get("status") != "success":
             reason = str(payload.get("reason") or "provider_error")
             message = str(payload.get("error") or result.stderr.strip() or result.stdout.strip() or reason)
-            fallback_safe = bool(payload.get("fallback_safe", True))
+            # Fail closed by default. A provider must explicitly return
+            # fallback_safe=true; omission is treated as ambiguous/unsafe.
+            fallback_safe = bool(payload.get("fallback_safe", False))
             raise IncrementalTransportError(message, reason=reason, fallback_safe=fallback_safe)
         layout = destination / LAYOUT_FILE
         if not layout.is_file():
