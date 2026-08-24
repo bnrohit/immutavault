@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from immutavault.config import PlatformConfig
+from immutavault.util import safe_component
 
 
 @dataclass(frozen=True)
@@ -20,6 +21,19 @@ class Adapter(ABC):
     def __init__(self, cfg: PlatformConfig, timeout: int) -> None:
         self.cfg = cfg
         self.timeout = timeout
+
+    def backup_root(self, base: Path, vm: VM, stamp: str) -> Path:
+        """Return the staging root used for one backup operation.
+
+        Export-style adapters use timestamped roots. Native incremental
+        transports may override this with a stable per-VM cache so unchanged
+        block files keep stable paths/inodes across restic snapshots.
+        """
+        return base / safe_component(self.cfg.name) / safe_component(vm.name) / stamp
+
+    def retain_backup_root(self, vm: VM) -> bool:
+        """Whether a successful backup root is a persistent transport cache."""
+        return False
 
     @abstractmethod
     def doctor(self) -> list[str]:
