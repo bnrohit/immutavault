@@ -57,11 +57,13 @@ print(f"Validated Immutavault {immutavault.__version__} runtime dependencies")
 PYEOF
 "$TARGET/bin/python" -m compileall -q "$TARGET/lib"
 "$TARGET/bin/immutavault" --help >/dev/null
+"$TARGET/bin/immutavault-setup" --help >/dev/null
 
 PREVIOUS=$(readlink -f "$CURRENT" 2>/dev/null || true)
 ln -sfn "$TARGET" "${CURRENT}.new"
 mv -Tf "${CURRENT}.new" "$CURRENT"
 ln -sfn "$CURRENT/bin/immutavault" /usr/local/bin/immutavault
+ln -sfn "$CURRENT/bin/immutavault-setup" /usr/local/bin/immutavault-setup
 if [[ -n "$PREVIOUS" && "$PREVIOUS" != "$TARGET" ]]; then
   printf '%s\n' "$PREVIOUS" > "$BASE/previous-release"
 fi
@@ -94,4 +96,4 @@ fi
 chown root:immutavault /etc/immutavault/immutavault.env
 chmod 640 /etc/immutavault/immutavault.env
 
-echo "Controller installed at $TARGET. Configure /etc/immutavault/immutavault.yml and /etc/immutavault/immutavault.env next."
+echo "Controller installed at $TARGET. Run 'sudo ./scripts/launch_setup_console.sh' for guided browser setup, or configure /etc/immutavault manually."
