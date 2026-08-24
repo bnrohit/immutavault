@@ -1,13 +1,17 @@
-# Immutavault v0.7.1
+# Immutavault v0.8.0
 
 Immutavault is an open, vendor-neutral **immutable VM backup, recovery, replication and disaster-recovery orchestrator** for VMware/vCenter, Proxmox VE and XCP-ng. It can run on a dedicated Linux server or Linux VM and use local RAID/ZFS, NFS/SMB/NAS, a second Immutavault vault, or S3-compatible object storage for additional recovery copies.
 
 The security principle is simple: **the identity that creates backups does not receive prune/delete authority.** The normal controller writes through an append-only REST service; a separate root-only maintenance path performs expiration. Recovery is similarly conservative: customers can choose recovery points, but Immutavault restores as a **new VM** and refuses implicit production overwrite.
 
-> **Readiness statement:** v0.7.1 is a production-pilot candidate. It adds a capability-gated VMware VDDK/CBT provider contract and a strict native-incremental policy that fails closed on unavailable, unsafe, malformed, or ambiguous provider state. Broadcom VDDK is not redistributed by Immutavault; an authorized `immutavault-vddk` provider/helper must be installed separately. Production acceptance still requires the live tests in `docs/PRODUCTION_ACCEPTANCE.md` on the actual environment.
+> **Readiness statement:** v0.8.0 is a production-pilot candidate with read-only file-level recovery and explicit application-consistency attestations. It adds a capability-gated VMware VDDK/CBT provider contract and a strict native-incremental policy that fails closed on unavailable, unsafe, malformed, or ambiguous provider state. Broadcom VDDK is not redistributed by Immutavault; an authorized `immutavault-vddk` provider/helper must be installed separately. Production acceptance still requires the live tests in `docs/PRODUCTION_ACCEPTANCE.md` on the actual environment.
 
-## What v0.7.1 includes
+## What v0.8.0 includes
 
+- **Granular file-level recovery (FLR):** browse a recovery point through short-lived read-only restic FUSE + libguestfs mounts and download one regular file without restoring the whole VM.
+- Owner-scoped FLR sessions, TTL/concurrency/download limits, traversal rejection, symlink blocking and audit events.
+- Application-consistency metadata stored in the immutable payload and recovery-point catalog.
+- `application_consistency_strict: true` for VMware; VDDK provider success without accepted consistency attestation fails closed before CBT checkpoint advancement.
 - VMware/vCenter native VDDK/CBT backup path through an external authorized provider/helper.
 - **Strict incremental mode:** `incremental_strict: true` means any native incremental failure fails the backup; no OVF/hot-clone fallback and no fake recovery point.
 - Non-strict fallback is allow-listed and fail-closed. Unknown reasons cannot fall back even when a provider claims fallback is safe.
@@ -76,7 +80,7 @@ Use separate failure domains. A single physical server can be a good primary vau
 ```bash
 git clone https://github.com/bnrohit/immutavault.git
 cd immutavault
-git checkout v0.7.1
+git checkout v0.8.0
 sudo ./scripts/preflight.sh
 ./scripts/release_check.sh
 sudo ./scripts/install.sh --role all --repo-root /srv/immutavault
@@ -106,6 +110,7 @@ platforms:
       incremental_cache_root: /var/cache/immutavault/vddk
       quiesce: true
       quiesce_fallback_crash_consistent: false
+      application_consistency_strict: true
       vddk_transport_order:
         - san
         - hotadd
@@ -130,6 +135,23 @@ Strict-mode behavior:
 `incremental_strict: true` is absolute. It prevents automatic hot-clone/OVF fallback, prevents a fallback recovery point from being presented as incremental, and does not advance a valid CBT chain after an uncertain native run.
 
 Broadcom VDDK itself is **not bundled**. The configured helper must implement the documented protocol-v1 capability/backup/restore contract. See `docs/VMWARE_BACKUP.md`.
+
+## Application consistency and file-level recovery
+
+Every v0.8 backup records the consistency state published by its transport. Strict VMware application consistency refuses silent crash-consistent downgrade. For native VDDK/CBT, the external provider must attest an accepted consistency state before the checkpoint can advance.
+
+The recovery portal adds a **Files** action. It mounts the encrypted restic snapshot with `--no-lock`, exposes supported guest disks using `guestmount --ro`, and streams only the selected regular file. The repository remains immutable and the portal receives no prune/delete authority. FLR sessions expire automatically and reject path traversal, symlink following, special-file downloads and cross-user session access.
+
+```yaml
+flr:
+  enabled: true
+  mount_root: /srv/immutavault/flr
+  session_ttl_minutes: 30
+  max_download_bytes: 5368709120
+  max_sessions_per_user: 2
+```
+
+See `docs/FILE_LEVEL_RECOVERY.md` for supported disk exposure, VDDK helper integration and acceptance tests.
 
 ## Controlled non-strict fallback
 
@@ -212,7 +234,8 @@ These are deliberate safety boundaries rather than marketing claims.
 - `docs/RESTORE.md` - restore runbook
 - `docs/DR_RUNBOOK.md` - failover/failback
 - `docs/HIGH_AVAILABILITY.md` - control-plane and data-plane HA
-- `docs/VMWARE_BACKUP.md` - native VDDK/CBT, strict mode and hot-clone fallback policy
+- `docs/VMWARE_BACKUP.md` - native VDDK/CBT, strict mode, application consistency and hot-clone fallback policy
+- `docs/FILE_LEVEL_RECOVERY.md` - v0.8 read-only granular file recovery
 - `docs/INCREMENTAL_STRICT_MODE.md` - v0.7.1 fail-closed incremental policy
 - `docs/REALTIME_READINESS.md` - RPO/RTO and live-data-plane boundaries
 - `docs/CLOUD_STORAGE.md` - S3/NFS/SMB targets

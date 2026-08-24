@@ -18,6 +18,7 @@ Immutavault can run on a dedicated physical Linux server or inside a Linux VM. T
 - `govc` for VMware inventory/full hot-clone workflows and recovery checks.
 - For native VMware VDDK/CBT: an externally installed, authorized `immutavault-vddk` helper/provider implementing protocol version 1. Broadcom VDDK is not bundled by Immutavault.
 - Reliable storage mounted before Immutavault services start.
+- For v0.8 file-level recovery: FUSE 3, libguestfs (`guestmount`/`guestunmount`) and qemu image tooling on the controller/portal host. The supported appliance installer installs these packages where available.
 
 ## 1. Prepare the host
 

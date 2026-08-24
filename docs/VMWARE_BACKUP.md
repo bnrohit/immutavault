@@ -1,6 +1,6 @@
 # VMware backup transport
 
-Immutavault v0.7.1 supports two VMware backup policies:
+Immutavault v0.8.0 supports two VMware backup policies:
 
 1. native VDDK/CBT through an externally installed, authorized provider/helper; and
 2. the proven `hot-clone-export` full-image workflow.
@@ -29,6 +29,7 @@ platforms:
       incremental_block_size: 134217728
       quiesce: true
       quiesce_fallback_crash_consistent: false
+      application_consistency_strict: true
       vddk_transport_order:
         - san
         - hotadd
@@ -64,6 +65,18 @@ Examples that fail in strict mode include:
 - invalid provider JSON;
 - unexpected provider exception/crash.
 
+## v0.8 application-consistency contract
+
+`application_consistency_strict: true` is independent of incremental strictness. It means a successful backup must also prove the requested guest/application consistency state.
+
+For `hot-clone-export`, successful VMware Tools quiescing is recorded as `guest-quiesced`; if crash-consistent fallback is configured and used, the recovery point is explicitly recorded as `crash-consistent`. Strict application consistency requires `quiesce: true` and `quiesce_fallback_crash_consistent: false`.
+
+For VDDK/CBT, the external provider receives `application_consistency_strict` in the protocol-v1 request. A strict provider success must include a `consistency` object whose state is `application-consistent` or `guest-quiesced`. Missing/unknown attestation fails closed before checkpoint advancement. The adapter then invalidates the uncertain cache, so consistency failure cannot contaminate the next CBT chain.
+
+The attestation is stored in `.immutavault-consistency.json`, included in the immutable payload, and copied into the recovery-point catalog. `guest-quiesced` proves VMware accepted guest quiescing; actual VSS/database/application-writer coverage must still be validated on the workload.
+
+See `docs/FILE_LEVEL_RECOVERY.md` for how the same recovery point is exposed read-only for single-file recovery.
+
 ## Provider protocol contract
 
 The helper is invoked for `capabilities`, `backup`, and `restore` operations. It must report protocol version 1 and the `cbt`, `backup`, and `restore` features before Immutavault considers it available.
@@ -75,7 +88,8 @@ A successful backup must:
 - exit successfully;
 - return JSON with `status: success`;
 - create `immutavault-vddk-layout.json` in the destination cache; and
-- return a non-empty per-disk checkpoint object.
+- return a non-empty per-disk checkpoint object; and
+- when strict application consistency is requested, return an accepted consistency attestation.
 
 Immutavault writes the checkpoint atomically and records transport metadata in `.immutavault-transport.json`.
 

@@ -42,6 +42,13 @@ else
   warn "rest-server missing (the all/repository installer can install the pinned/SHA-verified release)"
 fi
 command -v smartctl >/dev/null && pass "SMART tooling available" || warn "smartctl missing"
+if bash "$(dirname "$0")/check_flr.sh" >/tmp/immutavault-flr.$$ 2>&1; then
+  pass "FLR/FUSE/libguestfs prerequisites"
+else
+  warn "FLR prerequisites are incomplete; file-level recovery will be unavailable until fixed"
+  cat /tmp/immutavault-flr.$$
+fi
+rm -f /tmp/immutavault-flr.$$
 
 MEM_KIB=$(awk '/MemTotal:/{print $2}' /proc/meminfo 2>/dev/null || echo 0)
 if [[ ${MEM_KIB:-0} -ge 8388608 ]]; then pass "Memory >= 8 GiB"; else warn "Memory below 8 GiB"; fi

@@ -12,6 +12,7 @@ from .adapters import build_adapter
 from .adapters.base import VM
 from .anomaly import detect_backup_anomaly
 from .config import Config, PlatformConfig, ReplicaConfig
+from .consistency import point_consistency, read_consistency
 from .integrity import build_manifest, verify_manifest
 from .lock import exclusive_lock
 from .restic import ResticRepository
@@ -150,6 +151,15 @@ class BackupEngine:
         job_id = self.state.start_job(platform.name, vm.id, vm.name)
         try:
             exported = adapter.export(vm, staging_root)
+            application_consistency = read_consistency(exported) or {
+                "state": "snapshot-consistent",
+                "method": f"{platform.type}-snapshot-export",
+                "requested": False,
+                "strict": False,
+                "provider_attested": False,
+                "application_consistent": False,
+                "detail": "transport did not publish an application-consistency attestation",
+            }
             manifest, manifest_digest = build_manifest(staging_root)
             summary = self.repo.backup(
                 str(staging_root),
@@ -188,7 +198,12 @@ class BackupEngine:
                 "suspicious_reason": reason,
                 "verified": 0,
                 "verified_at": None,
-                "metadata_json": json.dumps({"exported": str(exported), "vm_kind": vm.kind, "platform_info": platform_info}),
+                "metadata_json": json.dumps({
+                    "exported": str(exported),
+                    "vm_kind": vm.kind,
+                    "platform_info": platform_info,
+                    "application_consistency": application_consistency,
+                }),
             }
             self.state.upsert_recovery_point(point)
             self.state.upsert_recovery_copy(
@@ -251,6 +266,7 @@ class BackupEngine:
                 "suspicious_reason": reason,
                 "replicas": replica_results,
                 "verified": verified,
+                "application_consistency": application_consistency,
             }
         except Exception as exc:
             self.state.finish_job(job_id, status="failed", error=str(exc))
@@ -272,6 +288,7 @@ class BackupEngine:
         points = self.state.list_points(platform=platform, vm_id=vm_id)
         now = datetime.now(timezone.utc)
         for point in points:
+            point["application_consistency"] = point_consistency(point)
             score = 100
             if not point.get("verified"):
                 score -= 25

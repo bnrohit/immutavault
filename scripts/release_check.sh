@@ -26,6 +26,9 @@ pyproject = Path('pyproject.toml').read_text()
 readme = Path('README.md').read_text()
 vmware_doc = Path('docs/VMWARE_BACKUP.md').read_text()
 incremental_example = Path('config/vmware-incremental.example.yml').read_text()
+flr_doc = Path('docs/FILE_LEVEL_RECOVERY.md').read_text()
+flr_code = Path('src/immutavault/flr.py').read_text()
+config_example = Path('config/immutavault.example.yml').read_text()
 
 assert f'__version__ = "{version}"' in init
 assert re.search(r'^version = "' + re.escape(version) + r'"$', pyproject, re.M)
@@ -50,6 +53,14 @@ for token in (
 assert 'mode: "vddk"' in incremental_example, 'VMware example is not pinned to native vddk mode'
 assert 'incremental_strict: true' in incremental_example
 assert 'incremental_fallback: false' in incremental_example
+assert 'application_consistency_strict: true' in incremental_example
+assert 'flr:' in config_example and 'mount_root: "/srv/immutavault/flr"' in config_example
+for token in ('restic mount', 'guestmount --ro', 'path traversal', 'symlink'):
+    assert token in flr_doc, f'FLR runbook missing safety token: {token}'
+for token in ('--no-lock', 'guestmount', 'does not follow guest symlinks', 'max_download_bytes'):
+    assert token in flr_code, f'FLR implementation missing required safety token: {token}'
+assert 'file-level recovery' in readme.lower(), 'README does not expose v0.8 FLR'
+assert 'application_consistency_strict: true' in readme, 'README omits strict application-consistency policy'
 print(version)
 PY
 pass "version/release documentation consistent: $VERSION"
@@ -137,6 +148,11 @@ grep -q -- '--append-only' scripts/check_rest_server.sh || fail 'rest-server com
 grep -q -- '--tls-min-ver' scripts/check_rest_server.sh || fail 'rest-server compatibility gate lacks hardened TLS check'
 ! grep -q 'does NOT download rest-server binaries' scripts/install_appliance.sh || fail 'appliance documentation still contains obsolete rest-server download statement'
 grep -q 'EnvironmentFile=/etc/immutavault/repository.env' systemd/immutavault-rest-server.service || fail 'rest-server still receives controller environment'
+grep -q 'libguestfs-tools' scripts/install_appliance.sh || fail 'appliance installer lacks FLR libguestfs dependency'
+grep -q 'fuse3' scripts/install_appliance.sh || fail 'appliance installer lacks FUSE3 dependency'
+grep -q 'guestmount' scripts/check_flr.sh || fail 'FLR prerequisite checker is missing guestmount gate'
+grep -q 'NoNewPrivileges=false' systemd/immutavault-portal.service || fail 'portal service cannot use packaged FUSE mount helper'
 pass 'restic/rest-server installs are pinned, checksummed, capability-gated, and privilege-separated'
+pass 'FLR FUSE/libguestfs installation contract is present'
 
 printf '\nALL RELEASE CHECKS PASSED for Immutavault %s\n' "$VERSION"

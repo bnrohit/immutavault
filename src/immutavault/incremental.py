@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 from typing import Any
 
+from .consistency import normalize_provider_consistency, write_consistency
 from .runner import run
 
 
@@ -60,8 +61,6 @@ class VDDKProvider:
     @staticmethod
     def _secure_dir(path: Path) -> None:
         path.mkdir(parents=True, exist_ok=True)
-        # CBT cache contains recoverable guest data and must not inherit a loose
-        # system umask. Best effort chmod is safe even when the directory exists.
         os.chmod(path, 0o700)
 
     def capabilities(self, *, env: dict[str, str]) -> dict[str, Any]:
@@ -133,6 +132,7 @@ class VDDKProvider:
                 fallback_safe=False,
             )
         helper = str(caps["helper"])
+        app_strict = bool(self.options.get("application_consistency_strict", False))
         self._secure_dir(destination)
         request = {
             "protocol_version": PROTOCOL_VERSION,
@@ -146,6 +146,7 @@ class VDDKProvider:
             "block_size": int(self.options.get("incremental_block_size") or DEFAULT_BLOCK_SIZE),
             "transport_order": list(self.options.get("vddk_transport_order") or ["san", "hotadd", "nbdssl"]),
             "quiesce": quiesce,
+            "application_consistency_strict": app_strict,
         }
         result = run(
             [helper, "backup", "--json"],
@@ -161,10 +162,21 @@ class VDDKProvider:
         if result.returncode != 0 or payload.get("status") != "success":
             reason = str(payload.get("reason") or "provider_error")
             message = str(payload.get("error") or result.stderr.strip() or result.stdout.strip() or reason)
-            # Fail closed by default. A provider must explicitly return
-            # fallback_safe=true; omission is treated as ambiguous/unsafe.
             fallback_safe = bool(payload.get("fallback_safe", False))
             raise IncrementalTransportError(message, reason=reason, fallback_safe=fallback_safe)
+
+        consistency = normalize_provider_consistency(
+            payload.get("consistency"),
+            requested=quiesce,
+            strict=app_strict,
+        )
+        if app_strict and quiesce and not consistency.application_consistent:
+            raise IncrementalTransportError(
+                "VDDK provider reported backup success without proving application/guest quiescence; strict application consistency fails closed",
+                reason="application_consistency_unproven",
+                fallback_safe=False,
+            )
+
         layout = destination / LAYOUT_FILE
         if not layout.is_file():
             raise IncrementalTransportError(
@@ -179,7 +191,11 @@ class VDDKProvider:
                 reason="missing_checkpoint",
                 fallback_safe=False,
             )
+
+        # Only advance the checkpoint after all strict transport and consistency
+        # gates have passed. A rejected point therefore cannot poison the next CBT run.
         self._write_json_atomic(destination / CHECKPOINT_FILE, checkpoint)
+        write_consistency(destination, consistency)
         transport = {
             "version": 1,
             "provider": "vddk-cbt",
@@ -188,6 +204,7 @@ class VDDKProvider:
             "source_bytes_read": int(payload.get("source_bytes_read") or 0),
             "transport": payload.get("transport"),
             "checkpoint": checkpoint,
+            "consistency": consistency.as_dict(),
         }
         self._write_json_atomic(destination / TRANSPORT_FILE, transport)
         return IncrementalResult(

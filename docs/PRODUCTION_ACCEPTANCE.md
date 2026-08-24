@@ -101,6 +101,21 @@ If the deployment deliberately uses `mode: hot-clone-export`, prove:
 - XVA imports as a temporary template, `vm-install` creates the bootable recovery VM on the configured SR, and the imported template is removed.
 - Restored workload boots isolated and application checks pass.
 
+## Phase 3B - application consistency and file-level recovery
+
+For each guest filesystem/workload class that will use FLR:
+
+1. Configure the intended application policy. Strict VMware examples use `quiesce: true`, `quiesce_fallback_crash_consistent: false`, and `application_consistency_strict: true`.
+2. Confirm the recovery point records the expected consistency state; do not treat `unknown`, `unattested`, or `crash-consistent` as application-consistent.
+3. `restic`, `guestmount`, `guestunmount`, FUSE and `/dev/fuse` are usable by the portal service identity.
+4. Open an FLR session on a disposable point and browse a nested NTFS/ext4/XFS path as applicable.
+5. Download a known file and compare SHA-256 with the source.
+6. Confirm `../` traversal is rejected and a guest symlink cannot be used as a download path.
+7. Confirm one restore operator cannot browse another operator's FLR session.
+8. Close/expire the session and verify both guest and restic FUSE mounts disappear.
+9. For VDDK/CBT strict application consistency, inject a provider success without `consistency`; the backup must fail and the CBT checkpoint must not advance.
+10. For native VDDK FLR, verify the provider layout exposes tested read-only `flr_disk_images`; otherwise FLR must fail explicitly rather than reconstructing an uncertain disk.
+
 ## Phase 4 - replica/cloud/NAS
 
 For every enabled replica:
