@@ -1,0 +1,34 @@
+name: publish-tested-v0.5.0
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  publish:
+    if: ${{ github.event.head_commit.message == 'Bootstrap exact tested Immutavault v0.5.0' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Reassemble and verify exact tested source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .bootstrap/part-* > /tmp/immutavault.b64
+          base64 -d /tmp/immutavault.b64 > /tmp/immutavault.tar.gz
+          echo 'a96a092278bc056123ddc496a52b06031ca555ab773abc15f94dce7d06e8af78  /tmp/immutavault.tar.gz' | sha256sum -c -
+      - name: Replace bootstrap tree with tested source
+        shell: bash
+        run: |
+          set -euo pipefail
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          tar -xzf /tmp/immutavault.tar.gz -C .
+          git config user.name 'Immutavault Release Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add -A
+          git commit -m 'Publish Immutavault v0.5.0 exact tested tree'
+          git push origin HEAD:main
+          git tag -f v0.5.0
+          git push origin refs/tags/v0.5.0 --force
