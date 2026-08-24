@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "immutavault"
-version = "0.7.0"
+version = "0.7.1"
 description = "Highly available immutable VM backup, recovery, replication and DR orchestrator for VMware/vCenter, Proxmox VE, and XCP-ng"
 readme = "README.md"
 requires-python = ">=3.10"
