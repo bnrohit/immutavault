@@ -76,7 +76,15 @@ if command -v systemd-analyze >/dev/null 2>&1; then
 fi
 
 rm -rf build dist src/*.egg-info
-python3 -m pip wheel . --no-deps --no-build-isolation -w dist >/dev/null
+# Prefer an offline build when the active interpreter already has the declared
+# setuptools backend. Fresh CI runners may not, even after an editable install
+# that used an isolated build environment, so fall back to normal PEP 517 build
+# isolation instead of reporting a false release failure.
+if python3 -c 'import setuptools.build_meta' >/dev/null 2>&1; then
+  python3 -m pip wheel . --no-deps --no-build-isolation -w dist >/dev/null
+else
+  python3 -m pip wheel . --no-deps -w dist >/dev/null
+fi
 WHEEL=$(find dist -maxdepth 1 -name 'immutavault-*.whl' -print -quit)
 [[ -f "$WHEEL" ]] || fail 'wheel was not produced'
 pass "wheel built: $(basename "$WHEEL")"
