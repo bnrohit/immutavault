@@ -1,18 +1,20 @@
-# VMware native-incremental overlay example for Immutavault v0.7.
+# VMware native-incremental overlay example for Immutavault v0.7.1.
 # Merge the platform entry into /etc/immutavault/immutavault.yml.
-# VDDK itself is NOT bundled by Immutavault; install an authorized provider
-# helper separately and point vddk_helper at it.
+# Broadcom VDDK itself is NOT bundled by Immutavault. Install an authorized
+# provider/helper separately and point vddk_helper at it.
+#
+# This example intentionally uses the enterprise strict policy: every successful
+# recovery point must come from the native VDDK/CBT path. Unsafe, unavailable or
+# ambiguous native state fails the backup; no automatic hot-clone/OVF fallback.
 
 platforms:
   - name: "vc-primary"
     type: "vmware"
     enabled: true
     endpoint: "https://vcenter.example.local/sdk"
-    mode: "auto"
+    mode: "vddk"
     include:
-      - "DC01"
-      - "SQL01"
-      - "FILE01"
+      - "*"
     exclude: []
     options:
       username_env: "VC_PRIMARY_USERNAME"
@@ -20,15 +22,15 @@ platforms:
       insecure: false
       tls_ca_certs: "/etc/immutavault/tls/vcenter-ca.crt"
 
-      # Application consistency. If strict quiescing fails, do not silently
-      # downgrade unless crash-consistent fallback is explicitly accepted.
+      # Application consistency. A failed quiesce must not silently downgrade
+      # to crash-consistent protection in the strict production profile.
       quiesce: true
       quiesce_fallback_crash_consistent: false
 
-      # v0.7 native incremental policy.
+      # v0.7.1 native incremental policy.
       vddk_helper: "/usr/local/bin/immutavault-vddk"
-      incremental_fallback: true
-      incremental_strict: false
+      incremental_strict: true
+      incremental_fallback: false
       incremental_cache_root: "/var/cache/immutavault/vddk"
       incremental_block_size: 134217728
       vddk_transport_order:
@@ -36,15 +38,31 @@ platforms:
         - "hotadd"
         - "nbdssl"
 
-      # Optional normal VMware placement hints used by fallback and recovery.
+      # Optional normal VMware placement hints used by recovery and by an
+      # explicitly selected hot-clone-export job if an operator changes modes.
       datacenter: "Primary-DC"
       datastore: "Primary-Datastore"
       network: "Server-Network"
       resource_pool: "/Primary-DC/host/Cluster/Resources"
 
-# Behavior:
+# Strict-mode behavior:
 # - Native provider healthy + CBT chain valid -> native baseline/incremental.
-# - Provider missing / CBT disabled / change ID reset -> hot-clone-export full
-#   fallback when incremental_fallback=true.
-# - Provider reports ambiguous unsafe state -> fail closed; no fallback.
-# - mode: hot-clone-export -> always use the proven full v0.6 path.
+# - Helper missing -> fail closed.
+# - CBT disabled/uninitialized/unsupported/invalid -> fail closed.
+# - Change-ID/generation reset -> fail closed.
+# - Unsupported disk -> fail closed.
+# - Provider unsafe/ambiguous/unknown -> fail closed.
+# - Provider omits fallback_safe -> fail closed.
+# - Provider crashes/returns malformed output -> fail closed.
+# - No hot-clone-export fallback is attempted.
+# - An in-progress native failure invalidates the per-VM cache before exit.
+#
+# If your operational policy explicitly allows a fresh full backup for a narrow
+# allow-listed condition, use non-strict mode instead:
+#
+#   mode: "auto"
+#   incremental_strict: false
+#   incremental_fallback: true
+#
+# Provider-stage fallback then still requires an allow-listed reason AND an
+# explicit fallback_safe=true. Unknown or ambiguous reasons always fail closed.

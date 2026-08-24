@@ -1,43 +1,43 @@
-# Immutavault v0.6.0
+# Immutavault v0.7.1
 
 Immutavault is an open, vendor-neutral **immutable VM backup, recovery, replication and disaster-recovery orchestrator** for VMware/vCenter, Proxmox VE and XCP-ng. It can run on a dedicated Linux server or Linux VM and use local RAID/ZFS, NFS/SMB/NAS, a second Immutavault vault, or S3-compatible object storage for additional recovery copies.
 
 The security principle is simple: **the identity that creates backups does not receive prune/delete authority.** The normal controller writes through an append-only REST service; a separate root-only maintenance path performs expiration. Recovery is similarly conservative: customers can choose recovery points, but Immutavault restores as a **new VM** and refuses implicit production overwrite.
 
-> **Readiness statement:** v0.6.0 retains the repeatable release suite and live restic/rest-server data-plane CI test from v0.5.1 and adds a guided setup console for hypervisors, exact VM selection, storage/cloud, and staged DR configuration. The release suite covers configuration, storage policy, recovery control, systemd assets, installers, VMware/Proxmox/XCP-ng adapter behavior, DR fencing/quorum/network planning, packaging, and setup-console safety. It is a production **pilot candidate**, not a blanket certification for every server, hypervisor release, guest OS, storage platform, or network. Production acceptance requires the live tests in `docs/PRODUCTION_ACCEPTANCE.md` on the actual environment.
+> **Readiness statement:** v0.7.1 is a production-pilot candidate. It adds a capability-gated VMware VDDK/CBT provider contract and a strict native-incremental policy that fails closed on unavailable, unsafe, malformed, or ambiguous provider state. Broadcom VDDK is not redistributed by Immutavault; an authorized `immutavault-vddk` provider/helper must be installed separately. Production acceptance still requires the live tests in `docs/PRODUCTION_ACCEPTANCE.md` on the actual environment.
 
-## What v0.6.0 includes
+## What v0.7.1 includes
 
-- VMware/vCenter inventory and **hot snapshot -> powered-off temporary clone -> OVF export** backup path, keeping the protected VM running. Strict quiesce policy is configurable; no silent crash-consistent fallback unless explicitly allowed.
+- VMware/vCenter native VDDK/CBT backup path through an external authorized provider/helper.
+- **Strict incremental mode:** `incremental_strict: true` means any native incremental failure fails the backup; no OVF/hot-clone fallback and no fake recovery point.
+- Non-strict fallback is allow-listed and fail-closed. Unknown reasons cannot fall back even when a provider claims fallback is safe.
+- In-flight native provider failures invalidate the per-VM CBT cache before any further action.
+- Existing VMware `hot-clone-export` remains available as an explicit full-backup transport and as a controlled non-strict fallback only when policy permits it.
+- VMware quiesce policy remains explicit; no silent crash-consistent downgrade unless configured.
 - Proxmox inventory, online `vzdump --mode snapshot`, safe `qmrestore`/`pct restore`, and cleanup guards.
-- XCP-ng inventory, supported snapshot-to-template XVA export, template-aware import/`vm-install`, and cleanup of the temporary recovery template.
+- XCP-ng inventory, snapshot-to-template XVA export, template-aware import/`vm-install`, and cleanup of temporary recovery templates.
 - Encrypted, deduplicated restic repository.
-- Pinned/SHA-256-verified restic 0.19.1 and capability-gated rest-server 0.14.0 install paths.
-- Authenticated TLS `rest-server` append-only writer endpoint.
-- Separate `immutavault` controller and `immutavault-store` repository OS identities.
+- Pinned/SHA-256-verified restic 0.19.1 and capability-gated rest-server 0.14.0 installation paths.
+- Authenticated TLS append-only `rest-server` writer endpoint.
+- Separate controller and repository OS identities.
 - Root-only GFS retention/prune with immutable-catalog protection.
-- Default 30-day immutability; daily/weekly/monthly/yearly retention.
-- SHA-256 manifest verification and full staged recovery-point verification.
-- Ransomware/churn anomaly detection and longer preservation for suspicious points.
+- Default 30-day immutability with daily/weekly/monthly/yearly retention.
+- SHA-256 manifest verification and staged recovery-point verification.
+- Ransomware/churn anomaly detection and extended preservation for suspicious points.
 - Tamper-evident SHA-256 audit chain.
 - Customer recovery portal/API, scoped roles, four-eyes approval and restore-source selection.
-- S3-compatible replicas: Wasabi, IDrive e2, Backblaze B2, AWS S3, MinIO, Ceph and custom endpoints.
+- S3-compatible replicas including Wasabi, IDrive e2, Backblaze B2, AWS S3, MinIO, Ceph and custom endpoints.
 - S3 Object Lock support where the provider implements it.
-- Cloudflare R2 support with Cloudflare-native Bucket Locks using a rolling **Date** horizon refreshed after successful copies; kept distinct from S3 Compliance Object Lock.
+- Cloudflare R2 Bucket Lock support with a rolling Date horizon, kept distinct from S3 Compliance Object Lock.
 - Filesystem replicas for NFS/SMB/TrueNAS/Dell or other mounted storage.
 - Online SQLite control-plane backups every five minutes.
-- Versioned application installs, atomic symlink upgrade and rollback.
+- Versioned application installs with atomic symlink upgrade and rollback.
 - Persistent systemd timers and independent portal/repository/backup/retention services.
-- Two-site DR orchestration with explicit fencing, maintenance suppression, probe quorum, VXLAN recovery VLANs, FRR/OSPF route ownership, boot order, workload health checks, failover and planned failback.
+- Two-site DR orchestration with fencing, probe quorum, VXLAN recovery VLANs, FRR/OSPF ownership, boot order, health checks, failover and planned failback.
 - Same-IP DR for explicitly configured stretched recovery VLANs: only the active site owns the gateway IP and advertises the subnet.
-- Automatic cross-hypervisor conversion is **blocked** until a conversion path is separately certified.
-- Guided browser setup for non-IT operators: test/add hypervisors, discover/check VMs, add/test/init storage, stage/map DR, preview/prepare VXLAN/OSPF, health-check and start backup schedules.
-- Per-platform Proxmox/XCP-ng SSH key references, so primary and DR hosts can use different credentials.
-
-
-### v0.6 audit-first dashboard
-
-The guided console puts **RPO Status** and **Immutable-Copy Verification** at the top of the page. The RPO target is stored in the same validated `protection.rpo_target_minutes` schema used by CLI automation. Immutable-copy verification confirms that the recovery snapshot is still visible at the selected repository and that the configured append-only/Object-Lock/Bucket-Lock retention is active; results are written back to the recovery-copy catalog for audit visibility.
+- Automatic cross-hypervisor conversion is blocked until a conversion path is separately certified.
+- Guided browser setup for hypervisors, VM selection, storage/cloud and staged DR configuration.
+- Audit-first dashboard with **RPO Status** and **Immutable-Copy Verification** front and center.
 
 ## Recommended production topology
 
@@ -63,141 +63,104 @@ The guided console puts **RPO Status** and **Immutable-Copy Verification** at th
             +---- Wasabi / e2 / B2 / R2 / NFS / NAS
 ```
 
-For unattended site failover, **do not place the only DR controller at the primary site**. Run the active controller at the DR/third site or maintain a tested warm standby there with replicated state backups. See `docs/HIGH_AVAILABILITY.md`.
+For unattended site failover, do not place the only DR controller at the primary site. Run the active controller at the DR/third site or maintain a tested warm standby there with replicated state backups. See `docs/HIGH_AVAILABILITY.md`.
 
 ## Hardware
 
-Immutavault does not require proprietary Dell/Cisco/Lenovo backup hardware. A practical controller/vault starts at 4 CPU threads and 8 GiB RAM; 8+ cores, 16-32+ GiB RAM, ECC memory, redundant power and 10/25 GbE are recommended for production. Backup capacity is determined primarily by protected data, change rate, retention, deduplication and replica policy—not by the controller CPU.
+Immutavault does not require proprietary backup hardware. A practical controller/vault starts at 4 CPU threads and 8 GiB RAM; 8+ cores, 16-32+ GiB RAM, ECC memory, redundant power and 10/25 GbE are recommended for production. Backup capacity is determined primarily by protected data, change rate, retention, deduplication and replica policy.
 
 Use separate failure domains. A single physical server can be a good primary vault, but cannot guarantee zero downtime or protect against complete chassis/site loss by itself.
 
 ## Fast install on Ubuntu 24.04 LTS
 
-The easiest dedicated appliance install is:
-
 ```bash
 git clone https://github.com/bnrohit/immutavault.git
 cd immutavault
-git checkout v0.6.0
+git checkout v0.7.1
 sudo ./scripts/preflight.sh
+./scripts/release_check.sh
 sudo ./scripts/install.sh --role all --repo-root /srv/immutavault
 sudo ./scripts/launch_setup_console.sh
 ```
 
-The last command starts the **Guided Setup Console**. Open `https://<vault-ip>:8788/`, paste the printed one-time token, and follow five steps: **Hypervisor → Select VMs → Storage/Cloud → DR Site → Test & Start**. Remote setup requires TLS, secrets are kept out of YAML, and automatic DR failover remains disabled. See `docs/SETUP_CONSOLE.md`.
+The installer never partitions or formats disks automatically. Do not enable recurring production backups until `doctor`, inventory, dry-run, **one real backup and one isolated restore/boot** all pass.
 
-The all/repository installer can fetch **pinned rest-server v0.14.0 from the official upstream GitHub release and verifies its SHA-256 before installation**. Use `--no-rest-server-download` if your change-control policy requires supplying the binary yourself.
+## VMware strict native incremental protection
 
-Nothing partitions or formats disks automatically.
-
-If you prefer the CLI/manual path instead of the guided console, edit `/etc/immutavault/immutavault.yml` and `/etc/immutavault/immutavault.env`, then run:
-
-```bash
-sudo -u immutavault bash -c '
-  set -a
-  source /etc/immutavault/immutavault.env
-  set +a
-  immutavault --config /etc/immutavault/immutavault.yml doctor
-'
-
-sudo -u immutavault bash -c '
-  set -a
-  source /etc/immutavault/immutavault.env
-  set +a
-  immutavault --config /etc/immutavault/immutavault.yml inventory
-'
-
-sudo -u immutavault bash -c '
-  set -a
-  source /etc/immutavault/immutavault.env
-  set +a
-  immutavault --config /etc/immutavault/immutavault.yml backup --all --dry-run
-'
-```
-
-Do not enable recurring production backup jobs until `doctor`, inventory, dry-run, **one real backup and one isolated restore/boot** all pass.
-
-When ready:
-
-```bash
-sudo systemctl enable --now immutavault-rest-server.service
-sudo systemctl enable --now immutavault-portal.service
-sudo systemctl enable --now immutavault-backup.timer
-sudo systemctl enable --now immutavault-state-backup.timer
-sudo systemctl enable --now immutavault-health.timer
-sudo systemctl enable --now immutavault-retention.timer
-sudo systemctl enable --now immutavault-verify.timer
-```
-
-The generic installer deliberately **does not enable DR auto-failover timers**. Those are enabled only after a controlled failover/failback acceptance drill.
-
-## Installation roles
-
-```bash
-# Complete controller + repository appliance
-sudo ./scripts/install.sh --role all --repo-root /srv/immutavault
-
-# Controller/portal only; repository is elsewhere
-sudo ./scripts/install.sh --role controller
-
-# Append-only repository node only
-sudo ./scripts/install.sh --role repository --repo-root /backup/immutavault
-```
-
-See `docs/INSTALLATION.md` for NFS/SMB, vCenter, Proxmox, XCP-ng and S3 prerequisites.
-
-## VMware backup behavior
-
-The recommended VMware mode is:
+For enterprise VMware environments where every scheduled point must be a genuine native incremental point, use:
 
 ```yaml
-mode: hot-clone-export
-options:
-  quiesce: true
-  quiesce_fallback_crash_consistent: false
+platforms:
+  - name: vc-primary
+    type: vmware
+    endpoint: https://vcenter.example.local/sdk
+    mode: vddk
+    include:
+      - "*"
+    options:
+      username_env: VC_PRIMARY_USERNAME
+      password_env: VC_PRIMARY_PASSWORD
+      vddk_helper: /usr/local/bin/immutavault-vddk
+      incremental_strict: true
+      incremental_fallback: false
+      incremental_cache_root: /var/cache/immutavault/vddk
+      quiesce: true
+      quiesce_fallback_crash_consistent: false
+      vddk_transport_order:
+        - san
+        - hotadd
+        - nbdssl
 ```
 
-Immutavault creates a short-lived source snapshot, creates a powered-off temporary clone from that point in time, exports that clone, removes the clone, then consolidates/removes the source snapshot. There is **no planned power-off of the protected VM**, although VMware snapshots can cause a brief stun and quiescing depends on VMware Tools/application behavior.
+Strict-mode behavior:
 
-This is safer than cold OVF export, but it is not yet VDDK/CBT incremental transport. Large VMware estates should treat native CBT/VDDK as the next performance/RPO milestone. See `docs/VMWARE_BACKUP.md`.
+| VDDK / CBT state | Result |
+| --- | --- |
+| Healthy CBT + valid change IDs | Native incremental backup |
+| Helper missing | Backup fails |
+| CBT disabled/uninitialized/unsupported | Backup fails |
+| CBT generation/change ID reset | Backup fails |
+| Unsupported disk | Backup fails |
+| Unsafe or ambiguous provider state | Fail closed |
+| Invalid/corrupt checkpoint | Fail closed |
+| Provider omits `fallback_safe` | Fail closed |
+| Provider crashes unexpectedly | Fail closed |
+| Hot-clone fallback | Never attempted |
+
+`incremental_strict: true` is absolute. It prevents automatic hot-clone/OVF fallback, prevents a fallback recovery point from being presented as incremental, and does not advance a valid CBT chain after an uncertain native run.
+
+Broadcom VDDK itself is **not bundled**. The configured helper must implement the documented protocol-v1 capability/backup/restore contract. See `docs/VMWARE_BACKUP.md`.
+
+## Controlled non-strict fallback
+
+Non-strict mode is for environments where a fresh full backup is acceptable for a narrowly recognized condition. It requires `incremental_fallback: true`, an allow-listed reason, and for provider-stage failures an explicit `fallback_safe: true`.
+
+For example, a provider-stage reset may be eligible only when the provider returns:
+
+```json
+{
+  "status": "fallback",
+  "reason": "change_id_reset",
+  "fallback_safe": true
+}
+```
+
+Omitted `fallback_safe`, unknown reasons, malformed output and unexpected provider exceptions fail closed.
 
 ## Backup and recovery
 
 ```bash
+immutavault --config /etc/immutavault/immutavault.yml doctor
+immutavault --config /etc/immutavault/immutavault.yml inventory
+immutavault --config /etc/immutavault/immutavault.yml backup --all --dry-run
 immutavault --config /etc/immutavault/immutavault.yml backup --all
 immutavault --config /etc/immutavault/immutavault.yml recovery-points
 immutavault --config /etc/immutavault/immutavault.yml verify-point --snapshot SNAPSHOT_ID
 ```
 
-Create a restore request:
-
-```bash
-immutavault --config /etc/immutavault/immutavault.yml restore-request \
-  --snapshot SNAPSHOT_ID \
-  --requester operator1 \
-  --target-platform vc-dr \
-  --target-name SERVER01-RECOVERY
-```
-
-A different identity approves when four-eyes policy is enabled:
-
-```bash
-immutavault --config /etc/immutavault/immutavault.yml restore-approve \
-  --request-id REQUEST_ID --approver backup-admin
-```
-
-Always preview before execution:
-
-```bash
-immutavault --config /etc/immutavault/immutavault.yml restore-execute \
-  --request-id REQUEST_ID --actor backup-admin --dry-run
-```
-
-Then execute. Immutavault refuses automatic overwrite of an existing target VM.
+Create and approve restore requests through the CLI or recovery portal. Always preview before execution. Immutavault refuses automatic overwrite of an existing target VM.
 
 ## Replicas and immutable cloud
-
-List/configure destinations:
 
 ```bash
 immutavault --config /etc/immutavault/immutavault.yml storage-targets
@@ -206,41 +169,11 @@ immutavault --config /etc/immutavault/immutavault.yml replica-lock-init --name w
 immutavault --config /etc/immutavault/immutavault.yml replica-lock-status --name wasabi-immutable
 ```
 
-NFS/SMB/TrueNAS/Dell storage should be mounted by the OS first and then configured as a `filesystem` replica or as the primary repository root.
+NFS/SMB/TrueNAS/Dell storage should be mounted by the OS first and then configured as a filesystem replica or primary repository root.
 
 ## DR failover
 
-DR is opt-in and disabled by default. First validate:
-
-```bash
-immutavault --config /etc/immutavault/immutavault.yml dr-plan
-immutavault --config /etc/immutavault/immutavault.yml dr-preflight
-immutavault --config /etc/immutavault/immutavault.yml dr-sync
-immutavault --config /etc/immutavault/immutavault.yml dr-network plan --site offshore-dr
-```
-
-A controlled failover is previewed before execution:
-
-```bash
-immutavault --config /etc/immutavault/immutavault.yml dr-promote
-```
-
-Only after the primary has been truly fenced/isolated:
-
-```bash
-immutavault --config /etc/immutavault/immutavault.yml dr-promote \
-  --execute --confirm-primary-fenced
-```
-
-Failback is also plan-first:
-
-```bash
-immutavault --config /etc/immutavault/immutavault.yml dr-failback
-immutavault --config /etc/immutavault/immutavault.yml dr-failback \
-  --execute --confirm-primary-isolated
-```
-
-See `docs/DR_RUNBOOK.md`. Never enable unattended failover without tested fencing **and separate fencing verification**.
+DR is opt-in and disabled by default. Validate `dr-plan`, `dr-preflight`, `dr-sync`, fencing and network ownership before any controlled promotion. Never enable unattended failover without tested fencing and separate fencing verification. See `docs/DR_RUNBOOK.md`.
 
 ## Release validation
 
@@ -250,14 +183,17 @@ Every release candidate must pass:
 ./scripts/release_check.sh
 ```
 
-This verifies version consistency, secret/state exclusions, Python compilation, shell parsing, the full test suite, production example config, CLI startup, systemd syntax, wheel creation/re-install, and the pinned/checksummed rest-server installer contract.
+The release gate verifies version consistency, documentation/version alignment, strict VMware incremental example policy, secret/state exclusions, Python compilation, shell parsing, the full test suite, production configuration, CLI startup, systemd syntax, wheel build/reinstall and the pinned/checksummed rest-server installation contract.
+
+GitHub CI additionally runs the Python matrix and a real authenticated TLS append-only restic/rest-server data-plane backup/restore test.
 
 A real environment must additionally pass `docs/PRODUCTION_ACCEPTANCE.md` before being declared production-ready.
 
 ## Important limits
 
-- No software on one server can promise literal zero downtime.
-- The VMware hot-clone transport avoids planned source shutdown, but is not CBT/CDP.
+- Broadcom VDDK is not redistributed or bundled. Native VMware incremental protection requires an authorized compatible helper/provider.
+- VDDK/CBT is backup incrementality, **not CDP**. RPO is bounded by the configured backup schedule and successful provider runs.
+- `hot-clone-export` remains a full-image transport; select it explicitly when that is the intended policy.
 - Current Proxmox and XCP-ng paths are snapshot/export based, not PBS/XO native incrementals.
 - Application consistency depends on guest/application quiescing and should be tested per workload.
 - Same-IP DR requires carefully designed routed underlay/VXLAN/MTU/firewall/OSPF and fencing.
@@ -269,15 +205,16 @@ These are deliberate safety boundaries rather than marketing claims.
 ## Documentation
 
 - `docs/QUICKSTART.md` - lab quick start
-- `docs/SETUP_CONSOLE.md` - guided browser configuration for non-IT operators
+- `docs/SETUP_CONSOLE.md` - guided browser configuration
 - `docs/INSTALLATION.md` - production installation
 - `docs/PRODUCTION_ACCEPTANCE.md` - go-live gates
 - `docs/OPERATIONS.md` - day-2 operations
 - `docs/RESTORE.md` - restore runbook
 - `docs/DR_RUNBOOK.md` - failover/failback
 - `docs/HIGH_AVAILABILITY.md` - control-plane and data-plane HA
-- `docs/VMWARE_BACKUP.md` - VMware hot backup behavior
-- `docs/REALTIME_READINESS.md` - exact RPO/RTO and live-data-plane boundaries
+- `docs/VMWARE_BACKUP.md` - native VDDK/CBT, strict mode and hot-clone fallback policy
+- `docs/INCREMENTAL_STRICT_MODE.md` - v0.7.1 fail-closed incremental policy
+- `docs/REALTIME_READINESS.md` - RPO/RTO and live-data-plane boundaries
 - `docs/CLOUD_STORAGE.md` - S3/NFS/SMB targets
 - `docs/SECURITY.md` - security model
 - `docs/ARCHITECTURE.md` - components/trust boundaries
