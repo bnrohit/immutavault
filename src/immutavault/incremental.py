@@ -57,6 +57,13 @@ class VDDKProvider:
             return str(candidate) if candidate.is_file() and os.access(candidate, os.X_OK) else None
         return shutil.which(self.helper)
 
+    @staticmethod
+    def _secure_dir(path: Path) -> None:
+        path.mkdir(parents=True, exist_ok=True)
+        # CBT cache contains recoverable guest data and must not inherit a loose
+        # system umask. Best effort chmod is safe even when the directory exists.
+        os.chmod(path, 0o700)
+
     def capabilities(self, *, env: dict[str, str]) -> dict[str, Any]:
         helper = self._resolved_helper()
         if not helper:
@@ -101,7 +108,7 @@ class VDDKProvider:
 
     @staticmethod
     def _write_json_atomic(path: Path, value: dict[str, Any]) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
+        VDDKProvider._secure_dir(path.parent)
         tmp = path.with_name(path.name + ".tmp")
         tmp.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         os.chmod(tmp, 0o600)
@@ -125,7 +132,7 @@ class VDDKProvider:
                 reason=str(caps.get("reason") or "provider_unavailable"),
             )
         helper = str(caps["helper"])
-        destination.mkdir(parents=True, exist_ok=True)
+        self._secure_dir(destination)
         request = {
             "protocol_version": PROTOCOL_VERSION,
             "operation": "backup",
