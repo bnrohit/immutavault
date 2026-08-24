@@ -71,6 +71,11 @@ def _deps() -> dict[str, dict[str, Any]]:
     return {str(k): dict(v) for k, v in rows.items() if isinstance(v, dict)}
 
 
+def dependency_row(snapshot_id: str) -> dict[str, Any] | None:
+    row = _deps().get(str(snapshot_id))
+    return dict(row) if row else None
+
+
 def _save_deps(rows: dict[str, dict[str, Any]]) -> None:
     atomic_json(_dep_path(), {"schema": SCHEMA, "snapshots": rows})
 
@@ -95,8 +100,7 @@ def commit_after_backup(source_path: str | Path, snapshot_id: str) -> None:
     current = read_json(path)
     kind = str(marker.get("kind") or "")
     if kind == "baseline":
-        parent = None
-        baseline = snapshot_id
+        parent = None; baseline = snapshot_id
         state = {
             "schema": SCHEMA, "transport": "vmware-cbt-vddk", "platform": platform,
             "vm_id": vm_id, "vm_name": str(marker.get("vm_name") or ""),
@@ -121,7 +125,10 @@ def commit_after_backup(source_path: str | Path, snapshot_id: str) -> None:
         raise RuntimeError(f"unknown VMware transport marker kind: {kind}")
     atomic_json(path, state)
     rows = _deps()
-    rows[snapshot_id] = {"parent": parent, "baseline": baseline, "kind": kind, "platform": platform, "vm_id": vm_id}
+    rows[snapshot_id] = {
+        "parent": parent, "baseline": baseline, "kind": kind, "platform": platform,
+        "vm_id": vm_id, "source_path": str(Path(source_path)),
+    }
     _save_deps(rows)
 
 
