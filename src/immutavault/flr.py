@@ -24,6 +24,60 @@ VMDK_EXTENT_SUFFIXES = ("-flat.vmdk", "-delta.vmdk", "-sesparse.vmdk", "-ctk.vmd
 LAYOUT_FILE = "immutavault-vddk-layout.json"
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
+    raw = os.getenv(name)
+    value = default if raw in (None, "") else int(raw)
+    if not minimum <= value <= maximum:
+        raise ValueError(f"{name} must be between {minimum} and {maximum}")
+    return value
+
+
+@dataclass(frozen=True)
+class FLRSettings:
+    """Runtime policy for v0.8 file-level recovery.
+
+    FLR is intentionally operational rather than backup-policy configuration:
+    it controls temporary FUSE/libguestfs sessions on the vault. Values are
+    environment-backed so the same immutable YAML can be used by controller and
+    portal services without placing host-specific mount policy in a backup job.
+    """
+
+    enabled: bool = True
+    mount_root: str = "/srv/immutavault/flr"
+    session_ttl_minutes: int = 30
+    max_download_bytes: int = 5 * 1024 * 1024 * 1024
+    max_sessions_per_user: int = 2
+    max_disks: int = 16
+    mount_wait_seconds: int = 30
+
+    @classmethod
+    def from_environment(cls) -> "FLRSettings":
+        mount_root = os.getenv("IMMUTAVAULT_FLR_MOUNT_ROOT", "/srv/immutavault/flr").strip()
+        if not mount_root.startswith("/"):
+            raise ValueError("IMMUTAVAULT_FLR_MOUNT_ROOT must be an absolute path")
+        return cls(
+            enabled=_env_bool("IMMUTAVAULT_FLR_ENABLED", True),
+            mount_root=mount_root,
+            session_ttl_minutes=_env_int("IMMUTAVAULT_FLR_SESSION_TTL_MINUTES", 30, minimum=1, maximum=240),
+            max_download_bytes=_env_int(
+                "IMMUTAVAULT_FLR_MAX_DOWNLOAD_BYTES",
+                5 * 1024 * 1024 * 1024,
+                minimum=1,
+                maximum=1024 * 1024 * 1024 * 1024,
+            ),
+            max_sessions_per_user=_env_int("IMMUTAVAULT_FLR_MAX_SESSIONS_PER_USER", 2, minimum=1, maximum=16),
+            max_disks=_env_int("IMMUTAVAULT_FLR_MAX_DISKS", 16, minimum=1, maximum=64),
+            mount_wait_seconds=_env_int("IMMUTAVAULT_FLR_MOUNT_WAIT_SECONDS", 30, minimum=1, maximum=180),
+        )
+
+
 @dataclass
 class FLRSession:
     session_id: str
@@ -75,6 +129,7 @@ class FLRManager:
         cfg: Config,
         repo: ResticRepository,
         *,
+        settings: FLRSettings | None = None,
         command_runner: Callable[..., Any] = run,
         popen_factory: Callable[..., subprocess.Popen[str]] = subprocess.Popen,
         which: Callable[[str], str | None] = shutil.which,
@@ -82,6 +137,7 @@ class FLRManager:
     ) -> None:
         self.cfg = cfg
         self.repo = repo
+        self.settings = settings or FLRSettings.from_environment()
         self._run = command_runner
         self._popen = popen_factory
         self._which = which
@@ -90,7 +146,7 @@ class FLRManager:
         self._lock = threading.RLock()
 
     def prerequisite_problems(self) -> list[str]:
-        if not self.cfg.flr.enabled:
+        if not self.settings.enabled:
             return []
         problems: list[str] = []
         for name in ("restic", "guestmount", "guestunmount"):
@@ -105,8 +161,20 @@ class FLRManager:
             problems.append("FLR service identity cannot read/write /dev/fuse")
         return problems
 
+    def status(self) -> dict[str, Any]:
+        self.cleanup_expired()
+        with self._lock:
+            active = len(self._sessions)
+        return {
+            "enabled": self.settings.enabled,
+            "active_sessions": active,
+            "session_ttl_minutes": self.settings.session_ttl_minutes,
+            "max_download_bytes": self.settings.max_download_bytes,
+            "prerequisite_problems": self.prerequisite_problems(),
+        }
+
     def _root(self) -> Path:
-        return Path(self.cfg.flr.mount_root)
+        return Path(self.settings.mount_root)
 
     def _session_root(self, session_id: str) -> Path:
         return self._root() / safe_component(session_id)
@@ -126,7 +194,7 @@ class FLRManager:
         root = self._root()
         if not root.exists():
             return
-        ttl_seconds = self.cfg.flr.session_ttl_minutes * 60
+        ttl_seconds = self.settings.session_ttl_minutes * 60
         for child in root.iterdir():
             if not child.is_dir():
                 continue
@@ -172,7 +240,7 @@ class FLRManager:
             candidates.append(path)
 
         layout = source / LAYOUT_FILE
-        if not candidates and layout.is_file():
+        if layout.is_file():
             try:
                 value = json.loads(layout.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
@@ -190,7 +258,7 @@ class FLRManager:
                     candidates.append(candidate)
 
         unique = sorted({str(p): p for p in candidates}.values(), key=lambda p: str(p))
-        return unique[: self.cfg.flr.max_disks]
+        return unique[: self.settings.max_disks]
 
     def _start_restic_mount(self, mountpoint: Path, log_handle: Any) -> subprocess.Popen[str]:
         restic = self._which("restic") or "restic"
@@ -212,13 +280,22 @@ class FLRManager:
         result = self._run(command, timeout=min(self.cfg.runtime.command_timeout_seconds, 600), check=False)
         if result.returncode != 0:
             detail = (result.stderr or result.stdout or "guestmount failed").strip()
-            raise RuntimeError(
-                "FLR could not inspect/mount the guest filesystem read-only: " + detail
-            )
+            raise RuntimeError("FLR could not inspect/mount the guest filesystem read-only: " + detail)
+
+    def _snapshot_root(self, restic_mount: Path, snapshot_id: str) -> Path:
+        exact = restic_mount / "ids" / snapshot_id
+        if exact.exists():
+            return exact
+        ids = restic_mount / "ids"
+        if ids.is_dir():
+            matches = [p for p in ids.iterdir() if p.name.startswith(snapshot_id)]
+            if len(matches) == 1:
+                return matches[0]
+        return exact
 
     def open_session(self, point: dict[str, Any], *, actor: str) -> dict[str, Any]:
-        if not self.cfg.flr.enabled:
-            raise RuntimeError("file-level recovery is disabled by configuration")
+        if not self.settings.enabled:
+            raise RuntimeError("file-level recovery is disabled by IMMUTAVAULT_FLR_ENABLED")
         problems = self.prerequisite_problems()
         if problems:
             raise RuntimeError("; ".join(problems))
@@ -226,10 +303,8 @@ class FLRManager:
 
         with self._lock:
             current = sum(1 for s in self._sessions.values() if s.owner == actor)
-            if current >= self.cfg.flr.max_sessions_per_user:
-                raise RuntimeError(
-                    f"FLR session limit reached for {actor}: {self.cfg.flr.max_sessions_per_user}"
-                )
+            if current >= self.settings.max_sessions_per_user:
+                raise RuntimeError(f"FLR session limit reached for {actor}: {self.settings.max_sessions_per_user}")
 
         session_id = uuid.uuid4().hex
         root = self._session_root(session_id)
@@ -243,10 +318,10 @@ class FLRManager:
         process: subprocess.Popen[str] | None = None
         try:
             process = self._start_restic_mount(restic_mount, log_handle)
-            snapshot_root = restic_mount / "ids" / str(point["snapshot_id"])
+            snapshot_root = self._snapshot_root(restic_mount, str(point["snapshot_id"]))
             ready = self._wait_for(
                 snapshot_root.exists,
-                seconds=self.cfg.flr.mount_wait_seconds,
+                seconds=self.settings.mount_wait_seconds,
                 process=process,
             )
             if not ready:
@@ -281,7 +356,7 @@ class FLRManager:
                 restic_mount=restic_mount,
                 guest_mount=guest_mount,
                 created_at=now,
-                expires_at=now + timedelta(minutes=self.cfg.flr.session_ttl_minutes),
+                expires_at=now + timedelta(minutes=self.settings.session_ttl_minutes),
                 disks=[str(p.relative_to(source)) for p in disks],
                 restic_process=process,
                 log_handle=log_handle,
@@ -366,15 +441,13 @@ class FLRManager:
         return parts
 
     @staticmethod
-    def _safe_guest_path(root: Path, parts: tuple[str, ...], *, allow_missing: bool = False) -> Path:
+    def _safe_guest_path(root: Path, parts: tuple[str, ...]) -> Path:
         current = root
         for part in parts:
             current = current / part
             try:
                 info = os.lstat(current)
             except FileNotFoundError:
-                if allow_missing:
-                    return current
                 raise ValueError("path not found")
             if stat.S_ISLNK(info.st_mode):
                 raise PermissionError("FLR does not follow guest symlinks")
@@ -404,15 +477,11 @@ class FLRManager:
                     "type": kind,
                     "size": item.st_size if kind == "file" else None,
                     "modified": datetime.fromtimestamp(item.st_mtime, tz=timezone.utc).isoformat(),
-                    "downloadable": kind == "file" and item.st_size <= self.cfg.flr.max_download_bytes,
+                    "downloadable": kind == "file" and item.st_size <= self.settings.max_download_bytes,
                 })
         entries.sort(key=lambda x: (x["type"] != "directory", x["name"].casefold()))
         normalized = "/" + "/".join(parts) if parts else "/"
-        return {
-            "session": session.public(),
-            "path": normalized,
-            "entries": entries,
-        }
+        return {"session": session.public(), "path": normalized, "entries": entries}
 
     def open_file(self, session_id: str, user_path: str, *, actor: str, admin: bool = False) -> FLRFile:
         session = self._session(session_id, actor=actor, admin=admin)
@@ -423,9 +492,9 @@ class FLRManager:
         info = os.lstat(path)
         if not stat.S_ISREG(info.st_mode):
             raise ValueError("FLR download path is not a regular file")
-        if info.st_size > self.cfg.flr.max_download_bytes:
+        if info.st_size > self.settings.max_download_bytes:
             raise ValueError(
-                f"file is {info.st_size} bytes, above configured FLR download limit {self.cfg.flr.max_download_bytes}"
+                f"file is {info.st_size} bytes, above configured FLR download limit {self.settings.max_download_bytes}"
             )
         return FLRFile(path=path, name=parts[-1], size=info.st_size)
 
