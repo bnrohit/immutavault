@@ -70,7 +70,7 @@ def test_any_started_provider_failure_discards_partially_written_cache(tmp_path,
     monkeypatch.setenv("V07_PASS", "pass")
     adapter = VMwareIncrementalAdapter(_cfg(tmp_path), 60)
     monkeypatch.setattr(adapter, "_provider", lambda: PartialFailure())
-    with pytest.raises(RuntimeError, match="cannot safely fall back"):
+    with pytest.raises(RuntimeError, match="failed closed"):
         adapter.export(VM(id="vm-1", name="sql01"), tmp_path / "staging")
     assert not (tmp_path / "cache/vc-main/sql01").exists()
 
