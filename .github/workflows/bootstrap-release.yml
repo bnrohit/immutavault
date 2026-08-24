@@ -16,10 +16,25 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Reassemble and verify exact tested source archive
+      - name: Verify release chunks and exact tested source archive
         shell: bash
         run: |
           set -euo pipefail
+          cat > /tmp/parts.sha256 <<'EOF'
+          772695b510ce3a6572a892ae4d813288a1023d352acf127c8d8d087d27f94804  .bootstrap/part-00
+          c9976bb3441f6d12e0fdff898684f8c1276c4678d97c90a14b82275b9c787fa6  .bootstrap/part-01
+          dd11c839815f19580b96771cdc89ef85968a8e3ce241d32a17cf978e78f3ffba  .bootstrap/part-02
+          eea3b1466b7a52d9d14c673b4b01b22950104fedceb8ae3184903edbb8544f89  .bootstrap/part-03
+          f252c9d3046b2015d987e884984721bfd8028bb5a40515337606939c81c75073  .bootstrap/part-04
+          32fdf5a2cd8e8f6da985c54ef4a806cf959d6caba40309fcf8a1da134a232f13  .bootstrap/part-05
+          475846611175f7a5d7054f57014706ea8a6bf14d069f44d0ae4cf155d6002c30  .bootstrap/part-06
+          72497a1bd0ca3ed27d803167fee2a2353dd13a78fe4d941ed51a2f294fde8ad9  .bootstrap/part-07
+          72a72738fa1bee93b82baa3d7e51a98ad71613538aba04ca2f06d38fe7cb32e7  .bootstrap/part-08
+          934286dbed282524b2f6cffb1c195e74fa5f54be2cafc08777bfd60a7f9cb3db  .bootstrap/part-09
+          298d734d4ad32732060d556ef8c4ada14fa9bcf15efdb386289441ed6d90e7e3  .bootstrap/part-10
+          d0e4e3a6b65ab3348af13eea33d06a99bcb4b16eb469ad799bc9226fa2949d40  .bootstrap/part-11
+          EOF
+          sha256sum -c /tmp/parts.sha256
           cat .bootstrap/part-* > /tmp/immutavault.b64
           base64 -d /tmp/immutavault.b64 > /tmp/immutavault.tar.gz
           echo 'a96a092278bc056123ddc496a52b06031ca555ab773abc15f94dce7d06e8af78  /tmp/immutavault.tar.gz' | sha256sum -c -
