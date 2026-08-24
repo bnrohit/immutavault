@@ -1,0 +1,50 @@
+# VMware native-incremental overlay example for Immutavault v0.7.
+# Merge the platform entry into /etc/immutavault/immutavault.yml.
+# VDDK itself is NOT bundled by Immutavault; install an authorized provider
+# helper separately and point vddk_helper at it.
+
+platforms:
+  - name: "vc-primary"
+    type: "vmware"
+    enabled: true
+    endpoint: "https://vcenter.example.local/sdk"
+    mode: "auto"
+    include:
+      - "DC01"
+      - "SQL01"
+      - "FILE01"
+    exclude: []
+    options:
+      username_env: "VC_PRIMARY_USERNAME"
+      password_env: "VC_PRIMARY_PASSWORD"
+      insecure: false
+      tls_ca_certs: "/etc/immutavault/tls/vcenter-ca.crt"
+
+      # Application consistency. If strict quiescing fails, do not silently
+      # downgrade unless crash-consistent fallback is explicitly accepted.
+      quiesce: true
+      quiesce_fallback_crash_consistent: false
+
+      # v0.7 native incremental policy.
+      vddk_helper: "/usr/local/bin/immutavault-vddk"
+      incremental_fallback: true
+      incremental_strict: false
+      incremental_cache_root: "/var/cache/immutavault/vddk"
+      incremental_block_size: 134217728
+      vddk_transport_order:
+        - "san"
+        - "hotadd"
+        - "nbdssl"
+
+      # Optional normal VMware placement hints used by fallback and recovery.
+      datacenter: "Primary-DC"
+      datastore: "Primary-Datastore"
+      network: "Server-Network"
+      resource_pool: "/Primary-DC/host/Cluster/Resources"
+
+# Behavior:
+# - Native provider healthy + CBT chain valid -> native baseline/incremental.
+# - Provider missing / CBT disabled / change ID reset -> hot-clone-export full
+#   fallback when incremental_fallback=true.
+# - Provider reports ambiguous unsafe state -> fail closed; no fallback.
+# - mode: hot-clone-export -> always use the proven full v0.6 path.
