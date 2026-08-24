@@ -33,8 +33,11 @@ printf '%s  %s\n' "$EXPECTED_SHA256" "$TMP/$ASSET" | sha256sum --check --status 
 }
 
 tar -xzf "$TMP/$ASSET" -C "$TMP"
-BIN=$(find "$TMP" -type f -name rest-server -perm -u+x -print -quit)
-[[ -n "$BIN" ]] || { echo "Verified archive did not contain an executable rest-server" >&2; exit 4; }
+# Release archives are checksum-verified before extraction. Do not require the
+# executable mode bit to survive archive creation/extraction: install(1) sets the
+# final mode explicitly and the capability gate below validates the binary.
+BIN=$(find "$TMP" -type f -name rest-server -print -quit)
+[[ -n "$BIN" ]] || { echo "Verified archive did not contain rest-server" >&2; exit 4; }
 install -o root -g root -m 0755 "$BIN" "$DEST"
 "$(dirname "$0")/check_rest_server.sh" "$DEST"
 printf 'Installed verified and compatible rest-server v%s to %s\n' "$VERSION" "$DEST"
