@@ -75,6 +75,21 @@ class VMwareIncrementalAdapter(VMwareAdapter):
             except OSError:
                 shutil.copy2(src, dst)
 
+    def _full_fallback(self, vm: VM, destination: Path, *, reason: str, error: str, cache_invalidated: bool) -> Path:
+        fallback = self._fallback_adapter().export(vm, destination, dry_run=False)
+        marker = {
+            "version": 1,
+            "provider": "hot-clone-export",
+            "mode": "fallback-full",
+            "fallback_reason": reason,
+            "fallback_error": error,
+            "native_cache_invalidated": cache_invalidated,
+        }
+        marker_path = fallback / TRANSPORT_FILE
+        marker_path.write_text(json.dumps(marker, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        os.chmod(marker_path, 0o600)
+        return fallback
+
     def doctor(self) -> list[str]:
         if not self._incremental_mode():
             return super().doctor()
@@ -129,6 +144,22 @@ class VMwareIncrementalAdapter(VMwareAdapter):
 
         cache = self._cache_root(vm)
         self._secure_parent(cache.parent)
+
+        # A failed capability probe happens before the provider is allowed to
+        # mutate the cache. Preserve a healthy checkpoint so a temporary helper
+        # outage does not force a new native baseline after it returns.
+        if not caps.get("available"):
+            reason = str(caps.get("reason") or "provider_unavailable")
+            if not self._fallback_allowed():
+                raise RuntimeError(f"native VMware incremental transport is unavailable and fallback is disabled: {reason}")
+            return self._full_fallback(
+                vm,
+                destination,
+                reason=reason,
+                error=str(caps.get("error") or reason),
+                cache_invalidated=False,
+            )
+
         try:
             result = provider.backup(
                 platform_name=self.cfg.name,
@@ -142,28 +173,21 @@ class VMwareIncrementalAdapter(VMwareAdapter):
             self._snapshot_view(result.path, target)
             return target
         except IncrementalTransportError as exc:
-            # A provider error can occur after it has already touched one or
-            # more cached blocks. Unless the provider completed successfully we
-            # cannot prove that cache represents one VMware point in time, so
-            # discard it for *every* provider failure. The next native attempt
-            # starts from a fresh baseline rather than trusting partial state.
+            # Once the provider has entered backup it may already have touched
+            # cached blocks. A non-success result cannot prove the cache is one
+            # consistent VMware point in time, so always invalidate it.
             shutil.rmtree(cache, ignore_errors=True)
             if not self._fallback_allowed() or not exc.fallback_safe:
                 raise RuntimeError(
                     f"native VMware incremental backup failed ({exc.reason}) and cannot safely fall back: {exc}"
                 ) from exc
-            fallback = self._fallback_adapter().export(vm, destination, dry_run=False)
-            marker = {
-                "version": 1,
-                "provider": "hot-clone-export",
-                "mode": "fallback-full",
-                "fallback_reason": exc.reason,
-                "fallback_error": str(exc),
-                "native_cache_invalidated": True,
-            }
-            (fallback / TRANSPORT_FILE).write_text(json.dumps(marker, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-            os.chmod(fallback / TRANSPORT_FILE, 0o600)
-            return fallback
+            return self._full_fallback(
+                vm,
+                destination,
+                reason=exc.reason,
+                error=str(exc),
+                cache_invalidated=True,
+            )
 
     def restore(self, source: Path, *, target_name: str, options: dict[str, Any], dry_run: bool = False) -> dict[str, Any]:
         layouts = sorted(source.rglob(LAYOUT_FILE))
