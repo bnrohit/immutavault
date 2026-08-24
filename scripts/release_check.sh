@@ -59,7 +59,8 @@ for token in ('restic mount', 'guestmount --ro', 'path traversal', 'symlink'):
     assert token in flr_doc, f'FLR runbook missing safety token: {token}'
 for token in ('--no-lock', 'guestmount', 'does not follow guest symlinks', 'max_download_bytes'):
     assert token in flr_code, f'FLR implementation missing required safety token: {token}'
-assert 'File-level recovery' in readme and 'application_consistency_strict: true' in readme
+assert 'file-level recovery' in readme.lower(), 'README does not expose v0.8 FLR'
+assert 'application_consistency_strict: true' in readme, 'README omits strict application-consistency policy'
 print(version)
 PY
 pass "version/release documentation consistent: $VERSION"
