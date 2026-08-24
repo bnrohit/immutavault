@@ -1,0 +1,14 @@
+[Unit]
+Description=Immutavault online catalog backup
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=immutavault
+Group=immutavault
+EnvironmentFile=/etc/immutavault/immutavault.env
+ExecStart=/usr/local/bin/immutavault --config /etc/immutavault/immutavault.yml state-backup
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true

@@ -1,0 +1,14 @@
+[Unit]
+Description=Immutavault DR site health/failover evaluator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/immutavault/immutavault.env
+ExecStart=/usr/local/bin/immutavault --config /etc/immutavault/immutavault.yml dr-watch
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true

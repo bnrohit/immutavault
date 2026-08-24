@@ -1,0 +1,123 @@
+# Example deployment for a repurposed Cisco BE7M-M5-K9 / UCS C240 M5SX.
+# Replace endpoints, bucket names and paths before production use.
+repository:
+  url: "rest:https://immutavault.example.local:8000/"
+  local_path: "/srv/immutavault/repository"
+  staging_path: "/srv/immutavault/staging"
+  cacert: "/etc/immutavault/tls/ca.crt"
+  verify_percent: 5
+  retention:
+    keep_within_days: 30
+    keep_daily: 30
+    keep_weekly: 8
+    keep_monthly: 12
+    keep_yearly: 3
+    min_restore_points: 2
+
+runtime:
+  state_db: "/var/lib/immutavault/state.db"
+  restore_staging_path: "/srv/immutavault/restore-staging"
+  verify_staging_path: "/srv/immutavault/verify-staging"
+  staging_min_free_percent: 10
+
+protection:
+  preserve_suspicious_points_days: 90
+  verify_after_backup: false
+  require_four_eyes_restore: true
+
+portal:
+  enabled: true
+  listen: "0.0.0.0"
+  port: 8787
+  tls_cert: "/etc/immutavault/tls/portal.crt"
+  tls_key: "/etc/immutavault/tls/portal.key"
+  users:
+    - {name: customer-restore, role: restore_operator, token_env: IMMUTAVAULT_CUSTOMER_TOKEN, sources: ["*"], vm_patterns: ["*"]}
+    - {name: backup-approver, role: approver, token_env: IMMUTAVAULT_APPROVER_TOKEN, sources: ["*"], vm_patterns: ["*"]}
+    - {name: vault-admin, role: admin, token_env: IMMUTAVAULT_ADMIN_TOKEN, sources: ["*"], vm_patterns: ["*"]}
+
+platforms:
+  - name: vc-prod
+    type: vmware
+    enabled: false
+    endpoint: https://vcenter.example.local
+  - name: pve-prod
+    type: proxmox
+    enabled: false
+    endpoint: pve01.example.local
+    ssh_user: backupsvc
+    options: {compress: "0", restore_storage: local-lvm}
+  - name: xcp-prod
+    type: xcpng
+    enabled: false
+    endpoint: xcp-master.example.local
+    ssh_user: backupsvc
+
+replicas:
+  - name: wasabi-immutable
+    enabled: false
+    backend: s3
+    provider: wasabi
+    endpoint: https://s3.us-central-1.wasabisys.com
+    region: us-central-1
+    bucket: company-immutavault
+    prefix: be7m-prod
+    password_env: RESTIC_WASABI_PASSWORD
+    access_key_env: WASABI_ACCESS_KEY_ID
+    secret_key_env: WASABI_SECRET_ACCESS_KEY
+    object_lock_enabled: true
+    object_lock_mode: COMPLIANCE
+    object_lock_days: 30
+
+  - name: idrive-e2
+    enabled: false
+    backend: s3
+    provider: idrive_e2
+    endpoint: https://s3.us-west-1.idrivee2.com
+    region: us-west-1
+    bucket: company-immutavault
+    prefix: be7m-prod
+    password_env: RESTIC_IDRIVE_PASSWORD
+    access_key_env: IDRIVE_E2_ACCESS_KEY_ID
+    secret_key_env: IDRIVE_E2_SECRET_ACCESS_KEY
+    object_lock_enabled: true
+    object_lock_mode: COMPLIANCE
+    object_lock_days: 30
+
+  - name: backblaze-b2
+    enabled: false
+    backend: s3
+    provider: backblaze_b2
+    endpoint: https://s3.us-west-000.backblazeb2.com
+    region: us-west-000
+    bucket: company-immutavault
+    prefix: be7m-prod
+    password_env: RESTIC_B2_PASSWORD
+    access_key_env: B2_S3_ACCESS_KEY_ID
+    secret_key_env: B2_S3_SECRET_ACCESS_KEY
+    object_lock_enabled: true
+    object_lock_mode: COMPLIANCE
+    object_lock_days: 30
+
+  - name: truenas-nfs-copy
+    enabled: false
+    backend: filesystem
+    path: /mnt/immutavault-copy
+    password_env: RESTIC_NAS_PASSWORD
+    mount_required: true
+    mount_type: nfs
+
+  - name: r2-retained
+    enabled: false
+    backend: s3
+    provider: cloudflare_r2
+    endpoint: https://ACCOUNT_ID.r2.cloudflarestorage.com
+    region: auto
+    bucket: immutavault
+    prefix: cisco-be7m
+    password_env: RESTIC_R2_PASSWORD
+    access_key_env: R2_ACCESS_KEY_ID
+    secret_key_env: R2_SECRET_ACCESS_KEY
+    object_lock_enabled: false
+    r2_bucket_lock_enabled: true
+    r2_bucket_lock_days: 30

@@ -1,0 +1,328 @@
+repository:
+  # The controller writes through this append-only REST endpoint.
+  url: "rest:https://backup.example.local:8000/"
+
+  # The root-only maintenance job accesses the same repository locally.
+  # /srv/immutavault can itself live on local RAID/ZFS or a mounted NFS/SMB share.
+  local_path: "/srv/immutavault/repository"
+  staging_path: "/srv/immutavault/staging"
+  cacert: "/etc/immutavault/tls/ca.crt"
+  verify_percent: 5
+  lock_file: "/run/lock/immutavault.lock"
+  retention:
+    keep_within_days: 30
+    keep_daily: 30
+    keep_weekly: 8
+    keep_monthly: 12
+    keep_yearly: 3
+    min_restore_points: 2
+
+runtime:
+  state_db: "/var/lib/immutavault/state.db"
+  command_timeout_seconds: 14400
+  keep_staging_on_failure: true
+  restore_staging_path: "/srv/immutavault/restore-staging"
+  verify_staging_path: "/srv/immutavault/verify-staging"
+  staging_min_free_percent: 10
+  # Online SQLite backups for disaster recovery of the catalog. 288 copies = 24h at 5-minute intervals.
+  state_backup_path: "/var/lib/immutavault/state-backups"
+  state_backup_keep: 288
+
+protection:
+  anomaly_data_added_ratio: 0.70
+  anomaly_size_change_ratio: 0.50
+  preserve_suspicious_points_days: 90
+  verify_after_backup: false
+  require_four_eyes_restore: true
+
+portal:
+  enabled: true
+  listen: "0.0.0.0"
+  port: 8787
+  tls_cert: "/etc/immutavault/tls/portal.crt"
+  tls_key: "/etc/immutavault/tls/portal.key"
+  users:
+    - name: "customer-restore"
+      role: "restore_operator"
+      token_env: "IMMUTAVAULT_CUSTOMER_TOKEN"
+      sources: ["*"]
+      vm_patterns: ["*"]
+    - name: "backup-approver"
+      role: "approver"
+      token_env: "IMMUTAVAULT_APPROVER_TOKEN"
+      sources: ["*"]
+      vm_patterns: ["*"]
+    - name: "vault-admin"
+      role: "admin"
+      token_env: "IMMUTAVAULT_ADMIN_TOKEN"
+      sources: ["*"]
+      vm_patterns: ["*"]
+
+platforms:
+  # VMware primary and DR examples. Each platform can use independent credentials,
+  # CA trust, datacenter, datastore, network and resource-pool placement.
+  - name: "vc-primary"
+    type: "vmware"
+    enabled: false
+    endpoint: "https://vcenter-primary.example.local/sdk"
+    mode: "hot-clone-export"
+    include: ["*"]
+    exclude: []
+    options:
+      username_env: "VC_PRIMARY_USERNAME"
+      password_env: "VC_PRIMARY_PASSWORD"
+      insecure: false
+      # Quiesce requires working VMware Tools. Keep fallback false for strict
+      # application-consistency policy, or explicitly allow crash-consistent snapshots.
+      quiesce: true
+      quiesce_fallback_crash_consistent: false
+      tls_ca_certs: "/etc/immutavault/tls/vcenter-primary-ca.crt"
+      datacenter: "Primary-DC"
+      datastore: "Primary-Datastore"
+      network: "Server-Network"
+      resource_pool: "/Primary-DC/host/Cluster/Resources"
+
+  - name: "vc-dr"
+    type: "vmware"
+    enabled: false
+    endpoint: "https://vcenter-dr.example.local/sdk"
+    mode: "hot-clone-export"
+    include: ["*"]
+    exclude: []
+    options:
+      username_env: "VC_DR_USERNAME"
+      password_env: "VC_DR_PASSWORD"
+      insecure: false
+      # Quiesce requires working VMware Tools. Keep fallback false for strict
+      # application-consistency policy, or explicitly allow crash-consistent snapshots.
+      quiesce: true
+      quiesce_fallback_crash_consistent: false
+      tls_ca_certs: "/etc/immutavault/tls/vcenter-dr-ca.crt"
+      datacenter: "DR-DC"
+      datastore: "DR-Datastore"
+      network: "Server-Network"
+      resource_pool: "/DR-DC/host/Cluster/Resources"
+
+  - name: "pve-primary"
+    type: "proxmox"
+    enabled: false
+    endpoint: "pve-primary.example.local"
+    ssh_user: "backupsvc"
+    mode: "vzdump"
+    include: ["*"]
+    exclude: []
+    options:
+      compress: "0"
+      restore_storage: "local-lvm"
+
+  - name: "pve-dr"
+    type: "proxmox"
+    enabled: false
+    endpoint: "pve-dr.example.local"
+    ssh_user: "backupsvc"
+    mode: "vzdump"
+    include: ["*"]
+    exclude: []
+    options:
+      compress: "0"
+      restore_storage: "local-lvm"
+
+  - name: "xcp-primary"
+    type: "xcpng"
+    enabled: false
+    endpoint: "xcp-primary.example.local"
+    ssh_user: "backupsvc"
+    mode: "snapshot-export"
+    include: ["*"]
+    exclude: []
+    options:
+      restore_sr_uuid: ""
+
+  - name: "xcp-dr"
+    type: "xcpng"
+    enabled: false
+    endpoint: "xcp-dr.example.local"
+    ssh_user: "backupsvc"
+    mode: "snapshot-export"
+    include: ["*"]
+    exclude: []
+    options:
+      restore_sr_uuid: ""
+
+# Optional second/third copies. All secrets are read from environment variables.
+# Initialize each destination once with: immutavault --config ... replica-init --name NAME
+replicas:
+  # Wasabi S3 with provider-side immutability.
+  - name: "wasabi-immutable"
+    enabled: false
+    backend: "s3"
+    provider: "wasabi"
+    endpoint: "https://s3.us-central-1.wasabisys.com"
+    region: "us-central-1"
+    bucket: "company-immutavault"
+    prefix: "prod"
+    password_env: "RESTIC_WASABI_PASSWORD"
+    access_key_env: "WASABI_ACCESS_KEY_ID"
+    secret_key_env: "WASABI_SECRET_ACCESS_KEY"
+    bucket_lookup: "path"
+    connections: 10
+    object_lock_enabled: true
+    object_lock_mode: "COMPLIANCE"
+    object_lock_days: 30
+
+  # IDrive e2 S3-compatible storage with Object Lock.
+  - name: "idrive-e2"
+    enabled: false
+    backend: "s3"
+    provider: "idrive_e2"
+    endpoint: "https://s3.us-west-1.idrivee2.com"
+    region: "us-west-1"
+    bucket: "company-immutavault"
+    prefix: "prod"
+    password_env: "RESTIC_IDRIVE_PASSWORD"
+    access_key_env: "IDRIVE_E2_ACCESS_KEY_ID"
+    secret_key_env: "IDRIVE_E2_SECRET_ACCESS_KEY"
+    object_lock_enabled: true
+    object_lock_mode: "COMPLIANCE"
+    object_lock_days: 30
+
+  # Backblaze B2 via its recommended S3-compatible API.
+  - name: "backblaze-b2"
+    enabled: false
+    backend: "s3"
+    provider: "backblaze_b2"
+    endpoint: "https://s3.us-west-000.backblazeb2.com"
+    region: "us-west-000"
+    bucket: "company-immutavault"
+    prefix: "prod"
+    password_env: "RESTIC_B2_PASSWORD"
+    access_key_env: "B2_S3_ACCESS_KEY_ID"
+    secret_key_env: "B2_S3_SECRET_ACCESS_KEY"
+    object_lock_enabled: true
+    object_lock_mode: "COMPLIANCE"
+    object_lock_days: 30
+
+  # Cloudflare R2 is S3-compatible. Its S3 API does not expose S3 Object Lock,
+  # but Immutavault can configure Cloudflare-native Bucket Locks using the admin CLI.
+  - name: "cloudflare-r2"
+    enabled: false
+    backend: "s3"
+    provider: "cloudflare_r2"
+    endpoint: "https://ACCOUNT_ID.r2.cloudflarestorage.com"
+    region: "auto"
+    bucket: "company-immutavault"
+    prefix: "prod"
+    password_env: "RESTIC_R2_PASSWORD"
+    access_key_env: "R2_ACCESS_KEY_ID"
+    secret_key_env: "R2_SECRET_ACCESS_KEY"
+    object_lock_enabled: false
+    r2_bucket_lock_enabled: true
+    r2_bucket_lock_days: 30
+    r2_lock_rule_id: "immutavault-prod-retention"
+    r2_account_id_env: "CLOUDFLARE_ACCOUNT_ID"
+    r2_api_token_env: "CLOUDFLARE_API_TOKEN"
+
+  # TrueNAS / Dell PowerStore / Dell Unity / generic NAS exported over NFS.
+  - name: "truenas-nfs"
+    enabled: false
+    backend: "filesystem"
+    path: "/mnt/immutavault-nfs"
+    password_env: "RESTIC_NAS_PASSWORD"
+    mount_required: true
+    mount_type: "nfs"
+    mount_source: "truenas.example.local:/mnt/pool/immutavault"
+
+  # SMB/CIFS target (TrueNAS, Windows Server, Dell NAS, etc.).
+  - name: "nas-smb"
+    enabled: false
+    backend: "filesystem"
+    path: "/mnt/immutavault-smb"
+    password_env: "RESTIC_NAS_PASSWORD"
+    mount_required: true
+    mount_type: "cifs"
+    mount_source: "//nas.example.local/immutavault"
+
+  # Another Immutavault/rest-server site.
+  - name: "dr-vault"
+    enabled: false
+    backend: "rest"
+    url: "rest:https://dr-backup.example.local:8000/"
+    cacert: "/etc/immutavault/tls/dr-ca.crt"
+    password_env: "RESTIC_DR_PASSWORD"
+
+# Optional two-site disaster recovery orchestration.
+# Same-IP failover uses dedicated Linux/FRR gateways. VXLAN stretches only the
+# configured recovery VLANs; OSPF advertises them only from the active site.
+disaster_recovery:
+  enabled: false
+  primary_site: main
+  dr_site: offshore-dr
+  replica: dr-vault
+  rpo_max_minutes: 1440
+  auto_failover: false
+  # Required before auto_failover=true. The controller/watch process must survive
+  # a total primary-site outage (DR site or a third site).
+  control_plane_site: offshore-dr
+  # A failure is counted only after this many consecutive unhealthy evaluations.
+  failure_threshold: 5
+  check_interval_seconds: 60
+  # 0 = every configured probe must fail. Set N to require at least N failures.
+  primary_failure_quorum: 0
+  # Presence of this file suppresses automatic promotion during maintenance.
+  maintenance_file: /var/lib/immutavault/dr-maintenance
+  fence:
+    # "manual" requires --confirm-primary-fenced for promotion.
+    # "command" can be used for automatic promotion; command strings come from env.
+    mode: manual
+    command_env: IMMUTAVAULT_DR_FENCE_COMMAND
+    verify_command_env: IMMUTAVAULT_DR_FENCE_VERIFY_COMMAND
+  primary_probes:
+    - {type: tcp, host: vcenter-primary.example.local, port: 443, timeout_seconds: 5}
+    - {type: tcp, host: primary-core.example.local, port: 22, timeout_seconds: 5}
+  sites:
+    - name: main
+      gateway:
+        host: drgw-main.example.local
+        ssh_user: root
+        underlay_interface: bond0
+        trunk_interface: bond1
+        vtep_ip: 10.255.250.1
+        router_id: 10.255.250.1
+        ospf_area: 0.0.0.0
+        ospf_cost: 10
+        ospf_auth_key_env: IMMUTAVAULT_OSPF_KEY
+    - name: offshore-dr
+      gateway:
+        host: drgw-offshore.example.local
+        ssh_user: root
+        underlay_interface: bond0
+        trunk_interface: bond1
+        vtep_ip: 10.255.250.2
+        router_id: 10.255.250.2
+        ospf_area: 0.0.0.0
+        ospf_cost: 10
+        ospf_auth_key_env: IMMUTAVAULT_OSPF_KEY
+  networks:
+    - name: servers
+      vlan_id: 48
+      vni: 10048
+      subnet: 10.14.48.0/21
+      gateway_cidr: 10.14.48.1/21
+      mtu: 1450
+    - name: voice-apps
+      vlan_id: 18
+      vni: 10018
+      subnet: 10.14.18.0/24
+      gateway_cidr: 10.14.18.1/24
+      mtu: 1450
+  workloads:
+    # Each workload may use VMware, Proxmox, or XCP-ng. Automatic recovery
+    # currently requires source and target to be the same hypervisor family.
+    - name: dns01
+      source_platform: vc-primary
+      target_platform: vc-dr
+      boot_order: 10
+      health_checks:
+        - {type: tcp, host: 10.14.48.11, port: 53, attempts: 18, interval_seconds: 10}
+    # Add additional workloads (pve-primary -> pve-dr or xcp-primary -> xcp-dr)
+    # only after both source/target platforms are enabled and tested.

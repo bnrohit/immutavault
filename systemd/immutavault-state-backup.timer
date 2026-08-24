@@ -1,0 +1,11 @@
+[Unit]
+Description=Back up Immutavault catalog every five minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+Persistent=true
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
