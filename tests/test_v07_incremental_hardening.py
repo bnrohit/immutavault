@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
@@ -45,7 +44,7 @@ class SafeMissingProvider:
         return {"available": False, "reason": "helper_missing"}
 
     def backup(self, **kwargs):
-        raise IncrementalTransportError("missing", reason="helper_missing", fallback_safe=True)
+        raise AssertionError("backup must not start after a failed capability probe")
 
 
 class FakeFallback:
@@ -66,7 +65,7 @@ def test_provider_cache_directory_is_private(tmp_path):
     assert dest.stat().st_mode & 0o777 == 0o700
 
 
-def test_any_provider_failure_discards_partially_written_cache(tmp_path, monkeypatch):
+def test_any_started_provider_failure_discards_partially_written_cache(tmp_path, monkeypatch):
     monkeypatch.setenv("V07_USER", "user")
     monkeypatch.setenv("V07_PASS", "pass")
     adapter = VMwareIncrementalAdapter(_cfg(tmp_path), 60)
@@ -76,32 +75,27 @@ def test_any_provider_failure_discards_partially_written_cache(tmp_path, monkeyp
     assert not (tmp_path / "cache/vc-main/sql01").exists()
 
 
-def test_missing_helper_uses_full_fallback_in_auto_mode(tmp_path, monkeypatch):
+def test_missing_helper_uses_full_fallback_without_destroying_good_cache(tmp_path, monkeypatch):
     monkeypatch.setenv("V07_USER", "user")
     monkeypatch.setenv("V07_PASS", "pass")
     adapter = VMwareIncrementalAdapter(_cfg(tmp_path), 60)
     monkeypatch.setattr(adapter, "_provider", lambda: SafeMissingProvider())
     monkeypatch.setattr(adapter, "_fallback_adapter", lambda: FakeFallback())
+    cache = tmp_path / "cache/vc-main/sql01"
+    cache.mkdir(parents=True)
+    (cache / ".immutavault-cbt-checkpoint.json").write_text('{"disk":"uuid/7"}', encoding="utf-8")
     out = adapter.export(VM(id="vm-1", name="sql01"), tmp_path / "staging")
     marker = (out / ".immutavault-transport.json").read_text(encoding="utf-8")
     assert '"mode": "fallback-full"' in marker
     assert '"fallback_reason": "helper_missing"' in marker
-    assert '"native_cache_invalidated": true' in marker
+    assert '"native_cache_invalidated": false' in marker
+    assert (cache / ".immutavault-cbt-checkpoint.json").is_file()
 
 
-def test_explicit_hot_clone_mode_does_not_probe_native_provider(tmp_path, monkeypatch):
+def test_explicit_hot_clone_mode_is_not_native_mode(tmp_path, monkeypatch):
     monkeypatch.setenv("V07_USER", "user")
     monkeypatch.setenv("V07_PASS", "pass")
-    cfg = _cfg(tmp_path)
-    cfg = PlatformConfig(**{**cfg.__dict__, "mode": "hot-clone-export"})
-    adapter = VMwareIncrementalAdapter(cfg, 60)
-    monkeypatch.setattr(adapter, "_provider", lambda: (_ for _ in ()).throw(AssertionError("provider should not be probed")))
-    fallback = FakeFallback()
-    monkeypatch.setattr(
-        VMwareIncrementalAdapter,
-        "_fallback_adapter",
-        lambda self: fallback,
-    )
-    # For an explicit legacy mode the wrapper delegates to its parent
-    # implementation, so only assert that native mode detection remains false.
+    original = _cfg(tmp_path)
+    legacy = PlatformConfig(**{**original.__dict__, "mode": "hot-clone-export"})
+    adapter = VMwareIncrementalAdapter(legacy, 60)
     assert adapter._incremental_mode() is False
