@@ -1,0 +1,31 @@
+# Merge this platform block into /etc/immutavault/immutavault.yml.
+# The Guided Setup Console can write the same validated schema for you.
+platforms:
+  - name: vc-primary
+    type: vmware
+    enabled: true
+    endpoint: "https://vcenter.example.local/sdk"
+    mode: "auto"  # preferred CBT/VDDK, safe full hot-clone fallback
+    include: ["DC01", "SQL01", "FILE01"]
+    exclude: []
+    options:
+      username_env: "VC_PRIMARY_USERNAME"
+      password_env: "VC_PRIMARY_PASSWORD"
+      insecure: false
+      quiesce: true
+      quiesce_fallback_crash_consistent: false
+
+      # v0.7 native incremental transport
+      cbt_auto_enable: true
+      incremental_fallback: true
+      cbt_max_chain_length: 32
+      vddk_libdir: "/opt/vmware-vix-disklib-distrib"
+      vddk_thumbprint: "AA:BB:CC:DD:EE:FF:..."
+      vddk_transports: "san:hotadd:nbdssl:nbd"
+      vddk_io_chunk_bytes: 4194304
+
+      # Normal VMware restore placement remains available.
+      datacenter: "Primary-DC"
+      datastore: "Primary-Datastore"
+      network: "Server-Network"
+      resource_pool: "/Primary-DC/host/Cluster/Resources"
