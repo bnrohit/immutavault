@@ -73,6 +73,10 @@ rm -rf "$BUILD_TMP"
 
 install -d -o root -g immutavault -m 0750 /etc/immutavault
 install -d -o immutavault -g immutavault -m 0750 /var/lib/immutavault "$ROOT/staging" "$ROOT/restore-staging" "$ROOT/verify-staging"
+install -d -o immutavault -g immutavault -m 0700 "$ROOT/flr"
+if getent group fuse >/dev/null 2>&1; then
+  usermod -a -G fuse immutavault
+fi
 
 if [[ ! -f /etc/immutavault/immutavault.yml ]]; then
   cp config/immutavault.example.yml /etc/immutavault/immutavault.yml

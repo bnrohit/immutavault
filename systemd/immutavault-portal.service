@@ -13,8 +13,11 @@ EnvironmentFile=/etc/immutavault/immutavault.env
 ExecStart=/usr/local/bin/immutavault --config /etc/immutavault/immutavault.yml portal
 Restart=always
 RestartSec=2
-NoNewPrivileges=true
+# FUSE3 fusermount is commonly setuid-root. no_new_privs would block the
+# kernel mount helper even though the portal itself remains User=immutavault.
+NoNewPrivileges=false
 PrivateTmp=true
+PrivateDevices=false
 ProtectSystem=full
 ProtectHome=true
 CapabilityBoundingSet=

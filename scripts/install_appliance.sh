@@ -16,13 +16,16 @@ if command -v apt-get >/dev/null; then
   apt-get update
   DEBIAN_FRONTEND=noninteractive apt-get install -y \
     python3 python3-venv python3-pip python3-setuptools python3-wheel python3-yaml python3-boto3 \
-    bzip2 openssh-client openssl apache2-utils smartmontools curl ca-certificates nfs-common cifs-utils
+    bzip2 openssh-client openssl apache2-utils smartmontools curl ca-certificates nfs-common cifs-utils \
+    fuse3 libguestfs-tools qemu-utils
 elif command -v dnf >/dev/null; then
   dnf install -y python3 python3-pip python3-setuptools python3-wheel python3-pyyaml python3-boto3 \
-    bzip2 openssh-clients openssl httpd-tools smartmontools curl ca-certificates nfs-utils cifs-utils
+    bzip2 openssh-clients openssl httpd-tools smartmontools curl ca-certificates nfs-utils cifs-utils fuse3 qemu-img
+  dnf install -y libguestfs-tools-c || dnf install -y libguestfs-tools
 elif command -v yum >/dev/null; then
   yum install -y python3 python3-pip python3-setuptools python3-wheel python3-pyyaml python3-boto3 \
-    bzip2 openssh-clients openssl httpd-tools smartmontools curl ca-certificates nfs-utils cifs-utils
+    bzip2 openssh-clients openssl httpd-tools smartmontools curl ca-certificates nfs-utils cifs-utils fuse3 qemu-img
+  yum install -y libguestfs-tools-c || yum install -y libguestfs-tools
 else
   echo "No supported package manager detected. Install Python 3.10+, PyYAML, boto3, bzip2, OpenSSH client, OpenSSL, htpasswd and smartmontools manually. The top-level installer will then install/validate the pinned restic binary." >&2
   exit 1

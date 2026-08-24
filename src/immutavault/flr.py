@@ -137,7 +137,20 @@ class FLRManager:
     ) -> None:
         self.cfg = cfg
         self.repo = repo
-        self.settings = settings or FLRSettings.from_environment()
+        if settings is not None:
+            self.settings = settings
+        elif hasattr(cfg, "flr"):
+            self.settings = FLRSettings(
+                enabled=cfg.flr.enabled,
+                mount_root=cfg.flr.mount_root,
+                session_ttl_minutes=cfg.flr.session_ttl_minutes,
+                max_download_bytes=cfg.flr.max_download_bytes,
+                max_sessions_per_user=cfg.flr.max_sessions_per_user,
+                max_disks=cfg.flr.max_disks,
+                mount_wait_seconds=cfg.flr.mount_wait_seconds,
+            )
+        else:
+            self.settings = FLRSettings.from_environment()
         self._run = command_runner
         self._popen = popen_factory
         self._which = which

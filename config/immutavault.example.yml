@@ -60,6 +60,15 @@ portal:
       sources: ["*"]
       vm_patterns: ["*"]
 
+flr:
+  enabled: true
+  mount_root: "/srv/immutavault/flr"
+  session_ttl_minutes: 30
+  max_download_bytes: 5368709120
+  max_sessions_per_user: 2
+  max_disks: 16
+  mount_wait_seconds: 30
+
 platforms:
   # VMware primary and DR examples. Each platform can use independent credentials,
   # CA trust, datacenter, datastore, network and resource-pool placement.
@@ -78,6 +87,7 @@ platforms:
       # application-consistency policy, or explicitly allow crash-consistent snapshots.
       quiesce: true
       quiesce_fallback_crash_consistent: false
+      application_consistency_strict: true
       tls_ca_certs: "/etc/immutavault/tls/vcenter-primary-ca.crt"
       datacenter: "Primary-DC"
       datastore: "Primary-Datastore"
@@ -99,6 +109,7 @@ platforms:
       # application-consistency policy, or explicitly allow crash-consistent snapshots.
       quiesce: true
       quiesce_fallback_crash_consistent: false
+      application_consistency_strict: true
       tls_ca_certs: "/etc/immutavault/tls/vcenter-dr-ca.crt"
       datacenter: "DR-DC"
       datastore: "DR-Datastore"

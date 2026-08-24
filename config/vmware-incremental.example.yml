@@ -1,4 +1,4 @@
-# VMware native-incremental overlay example for Immutavault v0.7.1.
+# VMware native-incremental + application-consistency overlay for Immutavault v0.8.0.
 # Merge the platform entry into /etc/immutavault/immutavault.yml.
 # Broadcom VDDK itself is NOT bundled by Immutavault. Install an authorized
 # provider/helper separately and point vddk_helper at it.
@@ -26,8 +26,9 @@ platforms:
       # to crash-consistent protection in the strict production profile.
       quiesce: true
       quiesce_fallback_crash_consistent: false
+      application_consistency_strict: true
 
-      # v0.7.1 native incremental policy.
+      # v0.7.1+ native incremental policy, retained by v0.8.0.
       vddk_helper: "/usr/local/bin/immutavault-vddk"
       incremental_strict: true
       incremental_fallback: false
