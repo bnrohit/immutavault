@@ -10,6 +10,7 @@ import uuid
 from typing import Any
 
 from .base import Adapter, VM
+from immutavault.consistency import ApplicationConsistency, write_consistency
 from immutavault.runner import run
 from immutavault.util import safe_component
 
@@ -64,6 +65,11 @@ class VMwareAdapter(Adapter):
             return problems
         if bool(self.cfg.options.get("insecure", False)):
             problems.append("VMware TLS verification is disabled (options.insecure=true); use a trusted CA/known-hosts file for production")
+        if bool(self.cfg.options.get("application_consistency_strict", False)):
+            if not bool(self.cfg.options.get("quiesce", True)):
+                problems.append("application_consistency_strict requires options.quiesce=true")
+            if bool(self.cfg.options.get("quiesce_fallback_crash_consistent", False)):
+                problems.append("application_consistency_strict requires quiesce_fallback_crash_consistent=false")
         for command in ("snapshot.create", "vm.clone", "export.ovf", "import.ovf"):
             help_probe = run(["govc", command, "-h"], timeout=30, env=env, check=False)
             if help_probe.returncode != 0:
@@ -108,7 +114,7 @@ class VMwareAdapter(Adapter):
         return included and not excluded
 
     def export(self, vm: VM, destination: Path, *, dry_run: bool = False) -> Path:
-        """Export a recoverable VM package.
+        """Export a recoverable VM package with explicit consistency metadata.
 
         `hot-clone-export` keeps the protected VM running: create a short-lived
         snapshot, clone that point-in-time state to a powered-off temporary VM,
@@ -124,6 +130,13 @@ class VMwareAdapter(Adapter):
         if mode in {"export", "cold-export"}:
             out.mkdir(parents=True, exist_ok=True)
             run(["govc", "export.ovf", "-vm", vm.id, str(out)], timeout=self.timeout, env=self._govc_env())
+            write_consistency(out, ApplicationConsistency(
+                state="powered-off-consistent",
+                method="vmware-cold-export",
+                requested=False,
+                strict=False,
+                detail="source VM was required to be powered off; guest application hooks were not asserted",
+            ))
             return out
         if mode not in {"hot-clone-export", "snapshot-clone-export", "hot"}:
             raise ValueError(f"unsupported VMware backup mode: {self.cfg.mode}")
@@ -135,14 +148,44 @@ class VMwareAdapter(Adapter):
         clone = f"immutavault-{safe_component(vm.name)[:48]}-{nonce}"
         quiesce = bool(self.cfg.options.get("quiesce", True))
         fallback = bool(self.cfg.options.get("quiesce_fallback_crash_consistent", False))
+        app_strict = bool(self.cfg.options.get("application_consistency_strict", False))
+        if app_strict and (not quiesce or fallback):
+            raise RuntimeError(
+                "application_consistency_strict requires quiesce=true and quiesce_fallback_crash_consistent=false"
+            )
         snapshot_created = False
         clone_created = False
+        consistency = ApplicationConsistency(
+            state="crash-consistent" if not quiesce else "unattested",
+            method="vmware-snapshot",
+            requested=quiesce,
+            strict=app_strict,
+            detail="guest quiescing was not requested" if not quiesce else None,
+        )
         try:
             snap_cmd = ["govc", "snapshot.create", "-vm", vm.id, "-m=false", f"-q={'true' if quiesce else 'false'}", "-d", "Immutavault point-in-time backup", snap]
             result = run(snap_cmd, timeout=self.timeout, env=env, check=False)
+            if result.returncode == 0 and quiesce:
+                consistency = ApplicationConsistency(
+                    state="guest-quiesced",
+                    method="vmware-tools-quiesced-snapshot",
+                    requested=True,
+                    strict=app_strict,
+                    provider_attested=True,
+                    detail="VMware accepted a Tools-quiesced snapshot; application/VSS coverage depends on guest tooling and workload integration",
+                )
             if result.returncode != 0 and quiesce and fallback:
                 snap_cmd = ["govc", "snapshot.create", "-vm", vm.id, "-m=false", "-q=false", "-d", "Immutavault crash-consistent point-in-time backup", snap]
                 result = run(snap_cmd, timeout=self.timeout, env=env, check=False)
+                if result.returncode == 0:
+                    consistency = ApplicationConsistency(
+                        state="crash-consistent",
+                        method="vmware-snapshot-fallback",
+                        requested=True,
+                        strict=False,
+                        provider_attested=True,
+                        detail="guest quiescing failed and explicitly configured crash-consistent fallback was used",
+                    )
             if result.returncode != 0:
                 raise RuntimeError(f"VMware snapshot failed for {vm.name}: {result.stderr.strip()}")
             snapshot_created = True
@@ -151,6 +194,7 @@ class VMwareAdapter(Adapter):
             run(clone_cmd, timeout=self.timeout, env=env)
             clone_created = True
             run(["govc", "export.ovf", "-vm", clone, str(out)], timeout=self.timeout, env=env)
+            write_consistency(out, consistency)
             return out
         finally:
             active_error = sys.exc_info()[0] is not None
@@ -160,8 +204,6 @@ class VMwareAdapter(Adapter):
                 if cleanup.returncode != 0:
                     cleanup_errors.append(f"temporary clone cleanup failed: {cleanup.stderr.strip()}")
             if snapshot_created:
-                # Consolidate the source disks after the temporary point-in-time
-                # snapshot is no longer needed. Cleanup is attempted even when export fails.
                 cleanup = run(["govc", "snapshot.remove", "-vm", vm.id, "-c=true", snap], timeout=self.timeout, env=env, check=False)
                 if cleanup.returncode != 0:
                     cleanup_errors.append(f"source snapshot cleanup/consolidation failed: {cleanup.stderr.strip()}")
@@ -174,10 +216,6 @@ class VMwareAdapter(Adapter):
             raise RuntimeError("no OVF descriptor found in VMware recovery point")
         ovf = ovfs[0]
         cmd = ["govc", "import.ovf", "-name", target_name]
-        # Modern govc supports -net for the common single-network OVF case. This is
-        # important for DR because exported distributed-portgroup references may not exist
-        # in a different vCenter. Multi-network VMs can still use a generated import-spec
-        # JSON through options_json.
         if options.get("network"):
             cmd += ["-net", str(options["network"])]
         if options.get("options_json"):
@@ -186,7 +224,6 @@ class VMwareAdapter(Adapter):
         if dry_run:
             return {"platform": self.cfg.name, "name": target_name, "ovf": str(ovf), "command": cmd}
         env = self._govc_env()
-        # Do not overwrite: verify the requested inventory name does not already exist.
         found = run(["govc", "find", "/", "-type", "m", "-name", target_name], timeout=60, env=env, check=False)
         if found.returncode == 0 and found.stdout.strip():
             raise RuntimeError(f"VM {target_name!r} already exists; Immutavault refuses overwrite")
