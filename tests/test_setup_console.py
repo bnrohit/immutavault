@@ -209,7 +209,7 @@ def test_rpo_target_is_shared_config_schema(tmp_path):
 def test_dashboard_prioritizes_rpo_and_immutable_copy_widgets():
     assert "RPO Status" in sc.base.UI or "RPO Status" in sc.UI
     assert "Immutable-Copy Verification" in sc.base.UI or "Immutable-Copy Verification" in sc.UI
-    assert "/api/v1/setup/dashboard" in Path(sc.base.__file__).read_text(encoding="utf-8")
+    assert "/api/v1/setup/dashboard" in Path(sc.__file__).read_text(encoding="utf-8")
 
 
 def test_copy_verification_uses_catalog_flag():
