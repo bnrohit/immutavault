@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 SMALL_FILE_HASH_LIMIT = 64 * 1024 * 1024
+MANIFEST_NAME = ".immutavault-manifest.json"
 
 
 def sha256_file(path: Path) -> str:
@@ -20,7 +21,10 @@ def sha256_file(path: Path) -> str:
 def build_manifest(root: Path) -> tuple[dict[str, Any], str]:
     records: list[dict[str, Any]] = []
     total_bytes = 0
-    for path in sorted(p for p in root.rglob("*") if p.is_file()):
+    # Persistent incremental roots are intentionally reused. Never include the
+    # previous manifest inside the next manifest or verification becomes
+    # self-referential and the old manifest hash can never match the new file.
+    for path in sorted(p for p in root.rglob("*") if p.is_file() and p.name != MANIFEST_NAME):
         stat = path.stat()
         total_bytes += stat.st_size
         records.append({
@@ -32,12 +36,12 @@ def build_manifest(root: Path) -> tuple[dict[str, Any], str]:
     manifest: dict[str, Any] = {"version": 1, "files": records, "total_bytes": total_bytes, "file_count": len(records)}
     payload = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
     digest = hashlib.sha256(payload).hexdigest()
-    (root / ".immutavault-manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    (root / MANIFEST_NAME).write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     return manifest, digest
 
 
 def verify_manifest(root: Path, *, expected_digest: str | None = None) -> tuple[bool, list[str]]:
-    manifest_path = root / ".immutavault-manifest.json"
+    manifest_path = root / MANIFEST_NAME
     if not manifest_path.exists():
         return False, ["manifest missing"]
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
