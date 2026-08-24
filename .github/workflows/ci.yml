@@ -1,0 +1,29 @@
+name: ci
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e '.[dev]'
+      - run: python -m compileall -q src
+      - run: bash -n scripts/*.sh
+      - run: pytest -q
+      - run: python -m pip wheel . --no-deps -w dist
+      - run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          version = Path("VERSION").read_text().strip()
+          init = Path("src/immutavault/__init__.py").read_text()
+          pyproject = Path("pyproject.toml").read_text()
+          assert f'__version__ = "{version}"' in init
+          assert re.search(r'^version = "' + re.escape(version) + r'"$', pyproject, re.M)
+          PY
