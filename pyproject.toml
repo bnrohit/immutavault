@@ -17,6 +17,7 @@ dev = ["pytest>=8,<9"]
 
 [project.scripts]
 immutavault = "immutavault.cli:main"
+# v0.6 compatibility/reference: immutavault-setup = "immutavault.setup_wizard:main"
 immutavault-setup = "immutavault.setup_v07:main"
 
 [tool.setuptools.packages.find]
