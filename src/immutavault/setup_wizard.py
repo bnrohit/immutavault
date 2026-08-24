@@ -82,17 +82,6 @@ base._env_write = _env_write
 
 
 def _enhance_ui(ui: str) -> str:
-    # Translate the developer-oriented base headings into an operator workflow.
-    # The underlying endpoints stay shared with the CLI/config schema.
-    headings = {
-        "<h2>1. Hypervisor</h2>": "<h2>1. Add a hypervisor</h2>",
-        "<h2>2. Select VMs</h2>": "<h2>2. Choose VMs to protect</h2>",
-        "<h2>3. Storage / Cloud</h2>": "<h2>3. Add storage or cloud</h2>",
-        "<h2>4. DR site and network</h2>": "<h2>4. Configure disaster-recovery site</h2>",
-        "<h2>5. Test and start</h2>": "<h2>5. Test and start protection</h2>",
-    }
-    for old, new in headings.items():
-        ui = ui.replace(old, new)
     if "Immutable-Copy Verification" not in ui:
         auth = '<div class="card"><label>One-time setup token <input id="token" type="password"></label> <button onclick="loadAll()">Connect</button> <span id="who" class="pill"></span></div>'
         if auth not in ui:
@@ -121,168 +110,216 @@ def _enhance_ui(ui: str) -> str:
     original_render = "function render(v){$('vms').innerHTML=v.map(x=>`<label class=\"vm\"><input class=\"vc\" type=\"checkbox\" value=\"${x.name}\" checked style=\"width:auto\"> ${x.name} (${x.power_state})</label>`).join('')||'No VMs discovered'}"
     enhanced_render = "function render(v){$('vms').innerHTML=v.map(x=>`<label class=\"vm\"><input class=\"vc\" type=\"checkbox\" value=\"${esc(x.name)}\" checked style=\"width:auto\"> ${esc(x.name)} (${esc(x.power_state)})</label>`).join('')||'No VMs discovered'}"
     ui = ui.replace(original_render, enhanced_render)
-    original_db = "function db(){return{name:$('dp').value,dr_site:$('dd').value,replica:$('dr').value,primary_gateway_host:$('dph').value,dr_gateway_host:$('ddh').value,{primary_vtep:$('dpv').value,dr_vtep:$('ddv').value,underlay_interface:$('ud').value,trunk_interface:$('dt').value,vlan_id:Number($('dv').value),vni:Number($('dni').value),subnet:$('dsn').value,gateway_cidr:$('dgw').value,mtu:Number($('dm').value)}}"
-    enhanced_db = "function db(){return{name:$('dp').value,dr_site:$('dd').value,replica:$('dr').value,primary_gateway_host:$('dph').value,dr_gateway_host:$('ddh').value,primary_vtep:$('dpv').value,dr_vtep:$('ddv').value,underlay_interface:$('ud').value,trunk_interface:$('dt').value,vlan_id:Number($('dv').value),vni:Number($('dni').value),subnet:$('dsn').value,gateway_cidr:$('dgw').value,mtu:Number($('dm').value),dr_ssh_key_path:$('dkey').value,ospf_key:$('dok').value,source_platform:$('dsrc').value,target_platform:$('ddst').value}}"
-    ui = ui.replace(original_db, enhanced_db)
+    if "function selectAll" not in ui:
+        ui = ui.replace('<button onclick="discover()">Refresh VMs</button>', '<button onclick="discover()">Refresh VMs</button> <button onclick="selectAll(true)">Select all</button> <button onclick="selectAll(false)">Clear</button>')
+        ui = ui.replace(enhanced_render, enhanced_render + "function selectAll(v){document.querySelectorAll('.vc').forEach(x=>x.checked=v)}")
+    old_db = "function db(){return{primary_site:$('dp').value,dr_site:$('dd').value,replica:$('dr').value,primary_gateway_host:$('dph').value,dr_gateway_host:$('ddh').value,primary_vtep:$('dpv').value,dr_vtep:$('ddv').value,underlay_interface:$('du').value,trunk_interface:$('dt').value,vlan_id:Number($('dv').value),vni:Number($('dni').value),subnet:$('dsn').value,gateway_cidr:$('dgw').value,mtu:Number($('dm').value)}}"
+    new_db = "function db(){return{primary_site:$('dp').value,dr_site:$('dd').value,replica:$('dr').value,primary_gateway_host:$('dph').value,dr_gateway_host:$('ddh').value,primary_vtep:$('dpv').value,dr_vtep:$('ddv').value,underlay_interface:$('du').value,trunk_interface:$('dt').value,vlan_id:Number($('dv').value),vni:Number($('dni').value),subnet:$('dsn').value,gateway_cidr:$('dgw').value,mtu:Number($('dm').value),dr_ssh_key_path:$('dkey').value,ospf_key:$('dok').value,source_platform:$('dsrc').value,target_platform:$('ddst').value}}"
+    ui = ui.replace(old_db, new_db)
+    ui = ui.replace(
+        'Immutavault only PREPARES VXLAN/FRR/OSPF after explicit confirmation. It does not promote DR here.',
+        'Choose a source and same-family DR hypervisor. Immutavault maps the exact VMs selected in step 2, then PREPARES VXLAN/FRR/OSPF only after explicit confirmation. It never promotes DR here.',
+    )
     return ui
 
 
-
 UI = _enhance_ui(base.UI)
+base.UI = UI
 
 
 class SetupManager(base.SetupManager):
     def status(self) -> dict[str, Any]:
         result = super().status()
-        try:
-            cfg = load_config(str(self.config_path))
-            result["rpo_target_minutes"] = cfg.protection.rpo_target_minutes
-        except Exception:
-            result["rpo_target_minutes"] = None
+        dr = base._load(self.config_path).get("disaster_recovery") or {}
+        result["dr_workloads"] = len(dr.get("workloads") or [])
         return result
 
     def save_rpo_target(self, minutes: int) -> dict[str, Any]:
-        if not 1 <= int(minutes) <= 10080:
-            raise ValueError("RPO target must be between 1 and 10080 minutes")
+        minutes = int(minutes)
+        if not 1 <= minutes <= 10080:
+            raise ValueError("RPO target must be between 1 minute and 7 days")
         data = base._load(self.config_path)
-        protection = dict(data.get("protection") or {}); protection["rpo_target_minutes"] = int(minutes); data["protection"] = protection
+        protection = dict(data.get("protection") or {})
+        protection["rpo_target_minutes"] = minutes
+        data["protection"] = protection
         _atomic(self.config_path, data)
-        return {"rpo_target_minutes": int(minutes)}
+        return {"rpo_target_minutes": minutes}
 
     def dashboard(self) -> dict[str, Any]:
-        self._reload_env()
-        cfg = load_config(str(self.config_path)); engine = BackupEngine(cfg); now = datetime.now(timezone.utc)
-        selected: list[tuple[str, str, str]] = []
+        self._reload_env(); cfg = load_config(str(self.config_path)); engine = BackupEngine(cfg)
+        now = datetime.now(timezone.utc); target = cfg.protection.rpo_target_minutes
+        catalog = engine.state.list_vms(); by_name = {(str(r["platform"]), str(r["vm_name"])): r for r in catalog}
+        protected: set[tuple[str, str]] = set()
         for platform in cfg.platforms:
             if not platform.enabled: continue
-            for vm in build_adapter(platform, cfg.runtime.command_timeout_seconds).inventory(): selected.append((platform.name, vm.id, vm.name))
-        rpo_rows, overdue, never = [], 0, 0
-        for platform, vm_id, vm_name in selected:
-            point = engine.state.latest_point(platform, vm_id); row = {"platform": platform, "vm_id": vm_id, "vm_name": vm_name, "latest_point": None, "age_minutes": None, "within_target": False}
-            if point:
-                try: created = datetime.fromisoformat(str(point["created_at"])); age = max(0.0, (now - created).¶‹Z–Çœ¢wlÿ­›İË\]JÈ›]\İÜÚ[ˆÚ[È˜Ü™X]YØ]—K˜YÙWÛZ[]\Èˆ›İ[™
-YÙKJKÚ][—İ\™Ù]ˆYÙHHÙ™Ëœ›İXİ[Û‹œœ×İ\™Ù]ÛZ[]\ßJNÈİ™\™YH
-ÏHYˆ›İÖÈÚ][—İ\™Ù]—H[ÙHBˆ^Ù\^Ù\[Ûˆİ™\™YH
-ÏHBˆ[ÙNˆ™]™\ˆ
-ÏHBˆœ×Ü›İÜË˜\[™
-›İÊBˆ[WÜ›İÜÎˆ\İÙXİÜİ‹[WWHH×Bˆ›Üˆ]›Ü›K›WÚY›WÛ˜[YH[ˆÙ[XİY‚ˆÚ[H[™Ú[™Kœİ]K›]\İÜÚ[
-]›Ü›K›WÚY
-BˆYˆ›İÚ[ˆÛÛ[YBˆÛÜY\ÈH[™Ú[™Kœİ]K›\İÜ™XÛİ™\WØÛÜY\ÊİŠÚ[ÈœÛ˜\ÚİÚY—JJNÈXİ]™HH×Bˆ›ÜˆÛÜH[ˆÛÜY\Î‚ˆYˆÛÜK™Ù]
-œİ]\ÈŠHOHœİXØÙ\ÜÈˆÛÛ[YBˆNˆ[[H]][YK™œ›ÛZ\ÛÙ›Ü›X]
-İŠÛÜK™Ù]
-š[[]]X›Wİ[[ˆÜˆˆŠJNÈØÚÙYH[[ˆ›İÂˆ^Ù\^Ù\[ÛˆØÚÙYH˜[ÙBˆÙÚXØ[H›ÛÛ
+            for row in catalog:
+                if str(row["platform"]) != platform.name: continue
+                name = str(row["vm_name"])
+                if any(fnmatch.fnmatch(name, pat) for pat in platform.include) and not any(fnmatch.fnmatch(name, pat) for pat in platform.exclude): protected.add((platform.name, name))
+            for name in platform.include:
+                if name != "*" and not any(ch in name for ch in "?[]"): protected.add((platform.name, name))
+        within = overdue = never = 0; snapshots: set[str] = set()
+        for key in protected:
+            row = by_name.get(key)
+            if not row or not row.get("latest_point"):
+                never += 1; continue
+            try:
+                created = datetime.fromisoformat(str(row["latest_point"])); created = created if created.tzinfo else created.replace(tzinfo=timezone.utc)
+                if (now-created).total_seconds()/60 <= target: within += 1
+                else: overdue += 1
+            except (TypeError, ValueError): overdue += 1
+            point = engine.state.latest_point(str(row["platform"]), str(row["vm_id"]))
+            if point: snapshots.add(str(point["snapshot_id"]))
+        total = active = verified = 0
+        for sid in snapshots:
+            point = engine.state.get_point(sid) or {}
+            for copy in engine.state.list_recovery_copies(sid):
+                name = str(copy.get("target_name")); lock = dict(copy.get("object_lock") or {})
+                candidate = name == "primary" or bool(lock.get("enabled")) or bool(lock.get("logical_immutability"))
+                if not candidate:
+                    try:
+                        r = engine._replica(name); candidate = r.object_lock_enabled or r.r2_bucket_lock_enabled
+                    except ValueError: pass
+                if not candidate: continue
+                total += 1
+                expiry = copy.get("immutable_until") or point.get("immutable_until")
+                try:
+                    dt = datetime.fromisoformat(str(expiry)); dt = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+                    active += int(dt > now and copy.get("status") == "success")
+                except (TypeError, ValueError): pass
+                verified += int(bool(copy.get("verified")))
+        return {"rpo":{"target_minutes":target,"total":len(protected),"within_target":within,"overdue":overdue,"never_backed_up":never},"immutable":{"total":total,"active":active,"verified":verified,"unverified":max(0,total-verified)}}
 
-ÛÜK™Ù]
-›Øš™XİÛØÚÈŠHÜˆßJK™Ù]
-›ÙÚXØ[Ú[[]]Xš[]HŠJBˆYˆØÚÙYÜˆÙÚXØ[ˆXİ]™K˜\[™
-ÛÜJBˆ[WÜ›İÜË˜\[™
-Èœ]›Ü›Hˆ]›Ü›K›WÛ˜[YHˆ›WÛ˜[YKœÛ˜\ÚİÚYˆÚ[ÈœÛ˜\ÚİÚY—K˜Xİ]™WØÛÜY\Èˆ[ŠXİ]™JK™\šYšYYØÛÜY\Èˆİ[JH›ÜˆÈ[ˆXİ]™HYˆË™Ù]
-™\šYšYYŠJ_JBˆ™]\›ˆÈœœÈˆÈ\™Ù]ÛZ[]\ÈˆÙ™Ëœ›İXİ[Û‹œœ×İ\™Ù]ÛZ[]\Ëİ[ˆ[Šœ×Ü›İÜÊKÚ][—İ\™Ù]ˆİ[JH›Üˆˆ[ˆœ×Ü›İÜÈYˆ–ÈÚ][—İ\™Ù]—JK›İ™\™YHˆİ™\™YK›™]™\—Ø˜XÚÙYİ\ˆ™]™\‹ÛÜšÛØYÈˆœ×Ü›İÜßKš[[]]X›HˆÈİ[ˆ[Š[WÜ›İÜÊK˜Xİ]™Hˆİ[JH›Üˆˆ[ˆ[WÜ›İÜÈYˆ–È˜Xİ]™WØÛÜY\È—JK™\šYšYYˆİ[JH›Üˆˆ[ˆ[WÜ›İÜÈYˆ–È™\šYšYYØÛÜY\È—JK[™\šYšYYˆİ[JH›Üˆˆ[ˆ[WÜ›İÜÈYˆ–È˜Xİ]™WØÛÜY\È—H[™›İ–È™\šYšYYØÛÜY\È—JKÛÜšÛØYÈˆ[WÜ›İÜß_B‚ˆYˆÜÛ˜\ÚİÙ^\İÊÙ[‹[™Ú[™Nˆ˜XÚİ\[™Ú[™KÛ˜\ÚİÚYˆİ‹™\XØOS›Û™JHOˆ›ÛÛ‚ˆ\™ÜÈH™\İX×ÛÜ[ÛœÊœ™\İXÈKZœÛÛˆÛ˜\ÚİÈŠBˆ™\ÈH[™Ú[™Kœ™\Ë—Ø˜\ÙJ
-H
-È\™ÜÈ
-ÈÈ‹KZœÛÛˆ‹œÛ˜\ÚİÈ—Bˆ[ˆH[™Ú[™Kœ™\Ë—Ù[Š
-BˆYˆ™\XØH\È›İ›Û™N‚ˆ™\ÈH[™Ú[™Kœ™\Ë—Ø˜\ÙJ
-^È
-È\™ÜÈ
-ÈÈ‹\ˆ‹˜\ÙKœ™\İX×İ\™Ù]İ\›
-™\XØJK‹KZœÛÛˆ‹œÛ˜\ÚİÈ—Bˆ[‹\]J\™Ù]Ù[Š™\XØJJBˆ™\İ[H[Š™\Ë[Y[‹[Y[İ]MŒÚXÚÏQ˜[ÙJBˆYˆ™\İ[œ™]\›˜ÛÙHOHˆ™]\›ˆ˜[ÙBˆNˆ›İÜÈHœÛÛ‹›ØYÊ™\İ[œİİ]Üˆ–×HŠBˆ^Ù\œÛÛ‹’”ÓÓ‘XÛÙQ\œ›Üˆ™]\›ˆ˜[ÙBˆ™]\›ˆ[JİŠ‹™Ù]
-œÚÜÚYˆÜˆ‹™Ù]
-šYŠHÜˆˆŠKœİ\İÚ]
-Û˜\ÚİÚY
-H›Üˆˆ[ˆ›İÜÊB‚ˆYˆ™\šYWÚ[[]]X›WØÛÜY\ÊÙ[ŠHOˆXİÜİ‹[WN‚ˆÙ[‹—Ü™[ØYÙ[Š
-NÈÙ™ÈHØYØÛÛ™šYÊİŠÙ[‹˜ÛÛ™šY×Ü]
-JNÈ[™Ú[™HH˜XÚİ\[™Ú[™JÙ™ÊNÈ›İÈH]][YK››İÊ[Y^›Û™K]ÊNÈ™\İ[ÈH×Bˆ›Üˆ]›Ü›H[ˆÙ™Ëœ]›Ü›\Î‚ˆYˆ›İ]›Ü›K™[˜X›YˆÛÛ[YBˆ›Üˆ›H[ˆZ[ØY\\Š]›Ü›KÙ™Ëœ[[YK˜ÛÛ[X[™İ[Y[İ]ÜÙXÛÛ™ÊKš[™[ÜJ
-N‚ˆÚ[H[™Ú[™Kœİ]K›]\İÜÚ[
-]›Ü›K›˜[YK›KšY
-BˆYˆ›İÚ[ˆÛÛ[YBˆÛ˜\ÚİHİŠÚ[ÈœÛ˜\ÚİÚY—JBˆ›ÜˆÛÜH[ˆ[™Ú[™Kœİ]K›\İÜ™XÛİ™\WØÛÜY\ÊÛ˜\Úİ
-N‚ˆYˆÛÜK™Ù]
-œİ]\ÈŠHOHœİXØÙ\ÜÈˆÛÛ[YBˆ\™Ù]HİŠÛÜVÈ\™Ù]Û˜[YH—JNÈÚË]Z[H˜[ÙKˆ‚ˆN‚ˆYˆ\™Ù]OHœš[X\H‚ˆÚÈHÙ[‹—ÜÛ˜\ÚİÙ^\İÊ[™Ú[™KÛ˜\Úİ
-BˆØÚÈHÛÜK™Ù]
-›Øš™XİÛØÚÈˆÜˆßNÈÙÚXØ[H›ÛÛ
-ØÚË™Ù]
-›ÙÚXØ[Ú[[]]Xš[]HŠJBˆNˆ[[H]][YK™œ›ÛZ\ÛÙ›Ü›JİŠÛÜK™Ù]
-š[[]]X›Wİ[[ŠHÜˆˆŠJNÈØÚÙYH[[ˆ›İÂˆ^Ù\^Ù\[ÛˆØÚÙYH˜[ÙBˆÚÈHÚÈ[™
-ÙÚXØ[ÜˆØÚÙY
-NÈ]Z[H˜\[™[Û›H˜][‚ˆ[ÙN‚ˆ™\XØHH™^
+    def _snapshot_exists(self, engine: BackupEngine, snapshot_id: str, target_name: str) -> bool:
+        if target_name == "primary":
+            result = run(["restic", "snapshots", snapshot_id, "--json"], timeout=300, env=engine.repo._env(local=False), check=False)
+        else:
+            replica = engine._replica(target_name)
+            result = run(["restic", *restic_options(replica), "snapshots", snapshot_id, "--json"], timeout=300, env=target_env(replica), check=False)
+        if result.returncode != 0: return False
+        try: return bool(json.loads(result.stdout or "[]"))
+        except json.JSONDecodeError: return False
 
-ˆ›Üˆˆ[ˆÙ™Ëœ™\XØ\ÈYˆ‹›˜[YHOH\™Ù]
-K›Û™JBˆYˆ›İ™\XØNˆ˜Z\ÙH[[YQ\œ›ÜŠ˜ÛÛ™šYİ\™Y™\XØH›İ›İ[™ŠBˆÚÈHÙ[‹—ÜÛ˜\ÚİÙ^\İÊ[™Ú[™KÛ˜\Úİ™\XØJBˆYˆ™\XØKœ›İšY\ˆOH˜ÛİY›\™WÜŒˆˆ[™™\XØKœŒ—ØXÚÙ]ÛØÚ×Ù[˜X›Y‚ˆİ]\ÈH˜\ÙKœ—ØXÚÙ]ÛØÚ×Üİ]\Ê™\XØJNÈÚÈHÚÈ[™›ÛÛ
-İ]\Ë™Ù]
-›ØÚÙYİ[[ŠHÜˆİ]\Ë™Ù]
-œ[\ÈŠJNÈ]Z[HœŒˆXÚÙ]ØÚÈ‚ˆ[Yˆ™\XØK˜˜XÚÙ[™OHœÌÈˆ[™™\XØK›Øš™XİÛØÚ×Ù[˜X›Y‚ˆ™Y›YÚHÌ×Ü™Y›YÚ
-™\XØJNÈÚÈHÚÈ[™›ÛÛ
-™Y›YÚ™Ù]
-›Øš™XİÛØÚ×Ù[˜X›YŠJNÈ]Z[HœÌÈØš™XİØÚÈ‚ˆ[ÙN‚ˆNˆ[[H]][YK™œ›ÛZ\ÛÙ›Ü›X]
-İŠÛÜK™Ù]
-š[[]]X›Wİ[[ˆÜˆˆŠJNÈÚÈHÚÈ[™[[ˆ›İÂˆ^Ù\^Ù\[ÛˆÚÈH˜[ÙBˆ]Z[H˜Ø][ÙÈ™][[Ûˆ‚ˆ^Ù\^Ù\[Ûˆ\È^Îˆ]Z[HİŠ^ÊNÈÚÈH˜[ÙBˆ[™Ú[™Kœİ]K›X\š×ØÛÜWİ™\šYšYY
-Û˜\Úİ\™Ù]ÚË]Z[
-NÈ™\İ[Ë˜\[™
-ÈœÛ˜\ÚİÚYˆÛ˜\Úİ\™Ù]ˆ\™Ù]™\šYšYYˆÚË™]Z[ˆ]Z[JBˆ™]\›ˆÈ›ÚÈˆ[
-‹™Ù]
-™\šYšYYŠH›Üˆˆ[ˆ™\İ[ÊHYˆ™\İ[È[ÙH˜[ÙK˜ÛÜY\Èˆ™\İ[ßB‚ˆYˆØ]™WÜ]›Ü›JÙ[‹›ÙNˆXİÜİ‹[WJHOˆXİÜİ‹[WN‚ˆ˜[YHHİŠ›ÙK™Ù]
-›˜[YHŠHÜˆˆŠKœİš\
+    def verify_immutable_copies(self) -> list[dict[str, Any]]:
+        self._reload_env(); engine = BackupEngine(load_config(str(self.config_path))); now = datetime.now(timezone.utc); results=[]; seen=set()
+        for vm in engine.state.list_vms():
+            point = engine.state.latest_point(str(vm["platform"]), str(vm["vm_id"]))
+            if not point: continue
+            sid = str(point["snapshot_id"])
+            if sid in seen: continue
+            seen.add(sid)
+            for copy in engine.state.list_recovery_copies(sid):
+                name = str(copy.get("target_name")); lock = dict(copy.get("object_lock") or {})
+                candidate = name == "primary" or bool(lock.get("enabled")) or bool(lock.get("logical_immutability"))
+                replica = None
+                if name != "primary":
+                    try:
+                        replica = engine._replica(name); candidate = candidate or replica.object_lock_enabled or replica.r2_bucket_lock_enabled
+                    except ValueError: pass
+                if not candidate: continue
+                detail={"snapshot_id":sid,"target":name}
+                try:
+                    exists=self._snapshot_exists(engine,sid,name); immutable=False
+                    if name == "primary": immutable=bool(lock.get("logical_immutability"))
+                    elif replica and replica.provider == "cloudflare_r2" and replica.r2_bucket_lock_enabled: immutable=bool(engine.replica_lock_status(name).get("enabled"))
+                    elif replica and replica.backend == "s3" and replica.object_lock_enabled:
+                        live=s3_preflight(replica); immutable=bool(live.get("object_lock_enabled")) and bool(lock.get("enabled"))
+                    expiry=copy.get("immutable_until") or point.get("immutable_until")
+                    try:
+                        dt=datetime.fromisoformat(str(expiry)); dt=dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc); immutable=immutable and dt>now
+                    except (TypeError,ValueError): immutable=False
+                    ok=bool(exists and immutable); engine.state.mark_copy_verified(sid,name,ok,None if ok else "snapshot or immutability verification failed")
+                    detail.update({"snapshot_present":exists,"immutability_active":immutable,"verified":ok})
+                except Exception as exc:
+                    engine.state.mark_copy_verified(sid,name,False,str(exc)); detail.update({"verified":False,"error":str(exc)})
+                engine.state.audit("setup-admin","recovery.copy.verify","recovery_copy",f"{sid}:{name}",detail); results.append(detail)
+        return results
 
-NÈ™]š[İ\×Ù]HH˜\ÙK—ÛØY
-Ù[‹˜ÛÛ™šY×Ü]
-NÈ™]š[İ\ÈH™^
+    def save_platform(self, body: dict[str, Any]) -> dict[str, Any]:
+        builder = getattr(self, "_platform", None) or getattr(self, "_platform_payload")
+        platform, env = builder(body)
+        data = base._load(self.config_path)
+        previous = next((p for p in (data.get("platforms") or []) if p.get("name") == platform["name"]), None)
+        if previous and previous.get("include") and previous.get("include") != ["*"]:
+            platform["include"] = list(previous["include"])
+        data["platforms"] = [p for p in (data.get("platforms") or []) if p.get("name") != platform["name"]] + [platform]
+        _atomic(self.config_path, data); _env_write(self.env_path, env); self._reload_env()
+        return {"saved": platform["name"], "type": platform["type"], "credential_envs": sorted(k for k, v in env.items() if v)}
 
-›Üˆ[ˆ™]š[İ\×Ù]K™Ù]
-œ]›Ü›\È‹×JHYˆ™Ù]
-›˜[YHŠHOH˜[YJK›Û™JNÈ™]š[İ\×ÜÙ[Xİ[ÛˆH\İ
+    def discover(self, name: str) -> dict[str, Any]:
+        self._reload_env(); cfg = load_config(str(self.config_path)); platform = next((p for p in cfg.platforms if p.name == name), None)
+        if not platform:
+            raise ValueError(f"unknown platform {name}")
+        broad = replace(platform, include=["*"], exclude=[])
+        adapter = build_adapter(broad, cfg.runtime.command_timeout_seconds)
+        problems = adapter.doctor()
+        if problems:
+            return {"ok": False, "problems": problems, "inventory": []}
+        return {"ok": True, "platform_info": adapter.platform_info(), "inventory": [vm.__dict__ for vm in adapter.inventory()]}
 
-™]š[İ\ÈÜˆßJK™Ù]
-š[˜ÛYHŠHÜˆ×JBˆ™\İ[Hİ\\Š
-KœØ]™WÜ]›Ü›J›ÙJBˆYˆ™]š[İ\×ÜÙ[Xİ[Ûˆ[™™]š[İ\×ÜÙ[Xİ[ÛˆOHÈŠˆ—N‚ˆ]HH˜\ÙK—ÛØY
-Ù[‹˜ÛÛ™šY×Ü]
-Bˆ›Üˆ]›Ü›H[ˆ]K™Ù]
-œ]›Ü›\È‹×JN‚ˆYˆ]›Ü›K™Ù]
-›˜[YHŠHOH˜[YNˆ]›Ü›VÈš[˜ÛYH—HH™]š[İ\×ÜÙ[Xİ[ÛÈ]›Ü›VÈ™^ÛYH—HH×NÈœ™XZÂˆØ]ÛZXÊÙ[‹˜ÛÛ™šY×Ü]]JBˆ™]\›ˆ™\İ[‚ˆYˆ\ØÛİ™\ŠÙ[‹˜[YNˆİŠHOˆXİÜİ‹[WN‚ˆÙ[‹—Ü™[ØYÙ[Š
-NÈÙ™ÈHØYØÛÛ™šYÊİŠÙ[‹˜ÛÛ™šY×Ü]
-JNÈ]›Ü›HH™^
+    def save_selection(self, platform: str, vms: list[str]) -> dict[str, Any]:
+        selected = list(dict.fromkeys(str(vm).strip() for vm in vms if str(vm).strip()))
+        if not selected:
+            raise ValueError("select at least one VM")
+        data = base._load(self.config_path)
+        for item in data.get("platforms") or []:
+            if item.get("name") == platform:
+                item["include"], item["exclude"] = selected, []
+                _atomic(self.config_path, data)
+                return {"platform": platform, "selected": len(selected), "vms": selected}
+        raise ValueError(f"unknown platform {platform}")
 
-›Üˆ[ˆÙ™Ëœ]›Ü›\ÈYˆ›˜[YHOH˜[YJK›Û™JBˆYˆ›İ]›Ü›Nˆ˜Z\ÙH˜[YQ\œ›ÜŠˆ[šÛ›İÛˆ]›Ü›HÛ˜[Y_HŠBˆœ›ØYH™\XÙJ]›Ü›K[˜ÛYOVÈŠˆ—K^ÛYOV×JNÈ[\HßBˆÙ^WÙ[ˆHİŠœ›ØY›Ü[ÛœË™Ù]
-œÜÚÚÙ^WÙ[ˆŠHÜˆˆŠBˆYˆÙ^WÙ[ˆ[™ÜË™Ù][ŠÙ^WÙ[ŠNˆ[\È’SSUUUUSÔÔÒÒÑVH—HHÜË™[š\›Û–ÚÙ^WÙ[—BˆÚ]˜\ÙK—İ[\Ü˜\WÙ[Š[\
-N‚ˆY\\ˆHZ[ØY\\Šœ›ØYÙ™Ëœ[[YK˜ÛÛ[X[™İ[Y[İ]ÜÙXÛÛ™ÊNÈ›Ø›[\ÈHY\\‹™ØİÜŠ
-BˆYˆ›Ø›[\Îˆ™]\›ˆÈ›ÚÈˆ˜[ÙKœ›Ø›[\Èˆ›Ø›[\Ëš[™[ÜHˆ×_Bˆ™]\›ˆÈ›ÚÈˆYKœ]›Ü›WÚ[™›ÈˆY\\‹œ]›Ü›WÚ[™›Ê
-Kš[™[ÜHˆİ—×ÙXİ×È›Üˆˆ[ˆY\\‹š[™[ÜJ
-W_B‚ˆYˆØ]™WÜÙ[Xİ[ÛŠÙ[‹]›Ü›Nˆİ‹›\Îˆ\İÜİ—JHOˆXİÜİ‹[WN‚ˆ˜[Y]YHÙ[‹™\ØÛİ™\Š]›Ü›JBˆYˆ›İ˜[Y]Y™Ù]
-›ÚÈŠNˆ˜Z\ÙH[[YQ\œ›ÜŠˆ˜Ø[››İ˜[Y]H“H[™[ÜNˆİ˜[Y]Y™Ù]
-	Ü›Ø›[\ÉÊ_HŠBˆ\ØÛİ™\™YHÜİŠÈ›˜[YH—JH›Üˆ[ˆ˜[Y]YÚ[™[ÜH—_NÈÙ[XİYHÜİŠ
-Kœİš\
-
-H›Üˆ[ˆ›\ÈYˆİŠ
-Kœİš\
-
-WBˆYˆ›İÙ[XİYˆ˜Z\ÙH˜[YQ\œ›ÜŠœÙ[Xİ]X\İÛ™H“HŠBˆ[šÛ›İÛˆHÛÜY
-Ù]
-Ù[XİY
-HH\ØÛİ™\™Y
-BˆYˆ[šÛ›İÛˆ˜Z\ÙH˜[YQ\œ›ÜŠˆ•“\È›ÈÛ™Ù\ˆ™\Ù[[ˆ[™[ÜNˆÉİ	Ë	Ëš›Ú[Š[šÛ›İÛŠ_HŠBˆ™]\›ˆİ\\Š
-KœØ]™WÜÙ[Xİ[ÛŠ]›Ü›KÙ[XİY
-B‚ˆYˆØ]™WÙŠÙ[‹›ÙNˆXİÜİ‹[WJHOˆXİÜİ‹[WN‚ˆ]HH˜\ÙK—ÛØY
-Ù[‹˜ÛÛ™šY×Ü]
-NÈ]›Ü›\ÈHÜİŠ™Ù]
-›˜[YHŠJNˆè®˜§u«Zëi•«_¢¹¬ source_name, target_name = str(body.get("source_platform") or ""), str(body.get("target_platform") or "")
-        if source_name not in platforms or target_name not in platforms: raise ValueError("choose a valid source and DR hypervisor")
-        if platforms[source_name].get("type") != platforms[target_name].get("type"): raise ValueError("automatic DR mapping requires the same hypervisor family")
-        selected = list(platforms[source_name].get("include") or [])
-        if not selected or selected == ["*"]: raise ValueError("select exact VMs to protect before configuring DR")
-        primary, dr, replica = str(body.get("primary_site") or "main"), str(body.get("dr_site") or "dr-site"), str(body.get("replica") or "").trim()
-        if not replica or not any(r.get("name" ) == replica and bool(r.get("enabled")) for r in data.get("replicas", [])): raise ValueError("choose an enabled DR storage replica")
+    def save_dr(self, body: dict[str, Any]) -> dict[str, Any]:
+        required = ["primary_site", "dr_site", "replica", "primary_gateway_host", "dr_gateway_host", "primary_vtep", "dr_vtep", "subnet", "gateway_cidr", "source_platform", "target_platform"]
+        missing = [key for key in required if not str(body.get(key) or "").strip()]
+        if missing:
+            raise ValueError("missing DR fields: " + ", ".join(missing))
         vlan, vni = int(body.get("vlan_id") or 0), int(body.get("vni") or 0)
-        if not 1 <= vlan <= 4094 or not 1 <= vni <= 16777215: raise ValueError("enter a valid VLAN (1-4094) and VNI")
-        tag, env_updates = "DE_GATEWAY", {}
-        if str(body.get("dr_ssh_key_path") or "").strip(): env_updates["IMMUTAVAULT_SSH_KEY"] = str(body["dr_ssh_key_path"]).strip()
-        if str(body.get("ospf_key") or "").strip(): env_updates["IMMUTAVAULT_OSPF_KEY"] = str(body["ospf_key"]).strip()
+        if not 1 <= vlan <= 4094 or not 1 <= vni <= 16777215:
+            raise ValueError("invalid VLAN or VNI")
+        data = base._load(self.config_path)
+        replicas = {r.get("name") for r in (data.get("replicas") or []) if r.get("enabled", True)}
+        if str(body["replica"]) not in replicas:
+            raise ValueError("DR replica must first be added and enabled in Storage / Cloud")
+        platforms = {p.get("name"): p for p in (data.get("platforms") or [])}
+        source_name, target_name = str(body["source_platform"]), str(body["target_platform"])
+        source, target = platforms.get(source_name), platforms.get(target_name)
+        if not source or not target:
+            raise ValueError("source and DR hypervisors must already be added")
+        if source_name == target_name:
+            raise ValueError("source and DR hypervisors must be different")
+        if source.get("type") != target.get("type"):
+            raise ValueError(f"cross-hypervisor automatic DR is blocked ({source.get('type')} -> {target.get('type')})")
+        selected = list(dict.fromkeys(str(x).strip() for x in (source.get("include") or []) if str(x).strip()))
+        if not selected or any(x == "*" or any(ch in x for ch in "?[]") for x in selected):
+            raise ValueError("select exact VMs in step 2 before creating the DR map")
+        primary, dr = str(body["primary_site"]).strip(), str(body["dr_site"]).strip()
+        if primary == dr:
+            raise ValueError("primary site and DR site must be different")
+        ospf_key = str(body.get("ospf_key") or "").strip()
+        if ospf_key and (len(ospf_key.encode()) > 16 or any(ch.isspace() for ch in ospf_key)):
+            raise ValueError("OSPF MD5 key must be at most 16 bytes and contain no whitespace")
+        env_updates: dict[str, str] = {}
+        if ospf_key:
+            env_updates["IMMUTAVAULT_OSPF_KEY"] = ospf_key
+        dr_key = str(body.get("dr_ssh_key_path") or "").strip()
+        if dr_key:
+            env_updates["IMMUTAVAULT_SSH_KEY"] = dr_key
+        underlay, trunk = str(body.get("underlay_interface") or "bond0"), str(body.get("trunk_interface") or "bond1")
         def site(name: str, host: str, vtep: str) -> dict[str, Any]:
-            return {"name": name, "gateway": {"host": host, "ssh_user": str(body.get("ssh_user") or "root"), "underlay_interface": str(body.get("underlay_interface") or "bond0"), "trunk_interface": str(body.get("trunk_interface") or "bond1"), "vtep_ip": vtep, "router_id": vtep, "ospf_area": "0.0.0.0", "ospf_cost": 10, "ospf_auth_key_env": "IMMUTAVAULT_OSPF_KEY" if "IMMUTAVAULT_OSPF_KEY" in env_updates else None}}
+            gateway: dict[str, Any] = {"host": host, "ssh_user": "root", "underlay_interface": underlay, "trunk_interface": trunk, "vtep_ip": vtep, "router_id": vtep, "ospf_area": "0.0.0.0", "ospf_cost": 10}
+            if ospf_key:
+                gateway["ospf_auth_key_env"] = "IMMUTAVAULT_OSPF_KEY"
+            return {"name": name, "gateway": gateway}
         drcfg = {
-            "enabled": True, "primary_site": primary, "dr_site": dr, "replica": replica, "rpo_max_minutes": int(body.get("rpo_max_minutes") or 1440), "auto_failover": False, "failure_threshold": 5, "check_interval_seconds": 60, "control_plane_site": dr, "primary_failure_quorum": 0, "maintenance_file": "/var/lib/immutavault/dr-maintenance",
-            "fence": {"mode": "manual", "command_env": "IMMUTAVAULT_DR_FENCE_COMMAND", "verify_command_env": "IMMUTAVAULT_DR_FENCE_VERIFY_COMMAND"}, "primary_probes": [],
+            "enabled": True, "primary_site": primary, "dr_site": dr, "replica": str(body["replica"]),
+            "rpo_max_minutes": 1440, "auto_failover": False, "control_plane_site": dr,
+            "failure_threshold": 5, "check_interval_seconds": 60, "primary_failure_quorum": 0,
+            "maintenance_file": "/var/lib/immutavault/dr-maintenance", "primary_probes": [],
+            "fence": {"mode": "manual", "command_env": "IMMUTAVAULT_DR_FENCE_COMMAND", "verify_command_env": "IMMUTAVAULT_DR_FENCE_VERIFY_COMMAND"},
             "sites": [site(primary, str(body["primary_gateway_host"]), str(body["primary_vtep"])), site(dr, str(body["dr_gateway_host"]), str(body["dr_vtep"]))],
             "networks": [{"name": f"vlan-{vlan}", "vlan_id": vlan, "vni": vni, "subnet": str(body["subnet"]), "gateway_cidr": str(body["gateway_cidr"]), "mtu": int(body.get("mtu") or 1450)}],
-            "workloads": [{
-"name": vm, "source_platform": source_name, "target_platform": target_name, "boot_order": (index + 1) * 10, "health_checks": [], "restore_options": {}} for index, vm in enumerate(selected)],
+            "workloads": [{"name": vm, "source_platform": source_name, "target_platform": target_name, "boot_order": (index + 1) * 10, "health_checks": [], "restore_options": {}} for index, vm in enumerate(selected)],
         }
         data["disaster_recovery"] = drcfg
         _atomic(self.config_path, data)
@@ -311,13 +348,12 @@ def serve(config: str, env: str, listen: str, port: int, cert: str | None, key: 
         def log_message(self, fmt: str, *args: Any) -> None: print(f"setup {self.client_address[0]} {fmt % args}")
         def _send(self, code: int, value: Any) -> None:
             payload=json.dumps(value,default=str).encode(); self.send_response(code); self.send_header("Content-Type","application/json"); self.send_header("Content-Length",str(len(payload))); self.send_header("Cache-Control","no-store"); self.send_header("X-Frame-Options","DENY"); self.send_header("X-Content-Type-Options","nosniff"); self.send_header("Referrer-Policy","no-referrer"); self.end_headers(); self.wfile.write(payload)
-        def _body(self) -> dict[str, Any]:
-            length = int(self.headers.get("Content-Length", "0") or 0)
-            if length > 1024 * 1024:
-                raise ValueError("request body too large")
-            return json.loads(self.rfile.read(length) or b"{}")
         def _auth(self) -> bool:
             header=self.headers.get("Authorization",""); return header.startswith("Bearer ") and base.hmac.compare_digest(header[7:],token)
+        def _body(self) -> dict[str,Any]:
+            length=int(self.headers.get("Content-Length","0") or 0);
+            if length>1024*1024: raise ValueError("request body too large")
+            return json.loads(self.rfile.read(length) or b"{}")
         def do_GET(self) -> None:
             if self.path=="/":
                 payload=UI.encode(); self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Content-Length",str(len(payload))); self.send_header("Cache-Control","no-store"); self.send_header("Content-Security-Policy","default-src 'self' 'unsafe-inline'; object-src 'none'; frame-ancestors 'none'"); self.send_header("X-Frame-Options","DENY"); self.send_header("Referrer-Policy","no-referrer"); self.send_header("X-Content-Type-Options","nosniff"); self.end_headers(); self.wfile.write(payload); return
@@ -342,7 +378,7 @@ def serve(config: str, env: str, listen: str, port: int, cert: str | None, key: 
                 elif path=="/api/v1/setup/storage/save": result=manager.save_storage(body)
                 elif path=="/api/v1/setup/storage/init": result=manager.init_storage(str(body.get("name") or ""))
                 elif path=="/api/v1/setup/dr/save": result=manager.save_dr(body)
-                elif path=="/api/v1/setup/dr/plan": result=manager.dr_plan( str(body.get("site") or ""))
+                elif path=="/api/v1/setup/dr/plan": result=manager.dr_plan(str(body.get("site") or ""))
                 elif path=="/api/v1/setup/dr/prepare": result=manager.dr_prepare(str(body.get("site") or ""),str(body.get("confirmation") or ""))
                 elif path=="/api/v1/setup/doctor": result=manager.doctor()
                 elif path=="/api/v1/setup/backup/dry-run": result=manager.backup(True)
