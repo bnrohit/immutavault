@@ -57,6 +57,7 @@ class PlatformConfig:
 
 @dataclass(frozen=True)
 class ProtectionConfig:
+    rpo_target_minutes: int = 1440
     anomaly_data_added_ratio: float = 0.70
     anomaly_size_change_ratio: float = 0.50
     preserve_suspicious_points_days: int = 90
@@ -204,7 +205,11 @@ def load_config(path: str | Path) -> Config:
     preserve_days = int(protection_raw.get("preserve_suspicious_points_days", 90))
     if preserve_days < retention.keep_within_days:
         raise ValueError("protection.preserve_suspicious_points_days must be >= repository retention keep_within_days")
+    rpo_target = int(protection_raw.get("rpo_target_minutes", 1440))
+    if not 1 <= rpo_target <= 10080:
+        raise ValueError("protection.rpo_target_minutes must be between 1 and 10080")
     protection = ProtectionConfig(
+        rpo_target_minutes=rpo_target,
         anomaly_data_added_ratio=anomaly_added,
         anomaly_size_change_ratio=anomaly_size,
         preserve_suspicious_points_days=preserve_days,

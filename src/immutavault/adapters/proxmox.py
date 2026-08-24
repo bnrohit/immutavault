@@ -14,17 +14,21 @@ from immutavault.util import safe_component
 
 
 class ProxmoxAdapter(Adapter):
+    def _key(self) -> str | None:
+        env_name = str(self.cfg.options.get("ssh_key_env") or "IMMUTAVAULT_SSH_KEY")
+        return os.getenv(env_name) or None
+
     def _ssh(self) -> list[str]:
         target = f"{self.cfg.ssh_user}@{self.cfg.endpoint}" if self.cfg.ssh_user else self.cfg.endpoint
         cmd = ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes"]
-        key = os.getenv("IMMUTAVAULT_SSH_KEY")
+        key = self._key()
         if key:
             cmd += ["-i", key]
         return cmd + [target]
 
     def _scp(self) -> list[str]:
         cmd = ["scp", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes"]
-        key = os.getenv("IMMUTAVAULT_SSH_KEY")
+        key = self._key()
         if key:
             cmd += ["-i", key]
         return cmd

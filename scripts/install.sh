@@ -145,7 +145,10 @@ Immutavault installation completed.
 Role:       $ROLE
 Repository: $REPO_ROOT
 
-Next commands:
+Recommended next step (guided browser setup):
+  sudo ./scripts/launch_setup_console.sh
+
+CLI/manual alternatives:
   immutavault hardware
   sudo -u immutavault bash -c 'set -a; source /etc/immutavault/immutavault.env; set +a; immutavault --config /etc/immutavault/immutavault.yml doctor'
   sudo -u immutavault bash -c 'set -a; source /etc/immutavault/immutavault.env; set +a; immutavault --config /etc/immutavault/immutavault.yml inventory'

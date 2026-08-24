@@ -8,6 +8,11 @@ PREVIOUS=$(cat "$FILE")
 ln -sfn "$PREVIOUS" /opt/immutavault/current.new
 mv -Tf /opt/immutavault/current.new /opt/immutavault/current
 ln -sfn /opt/immutavault/current/bin/immutavault /usr/local/bin/immutavault
+if [[ -x /opt/immutavault/current/bin/immutavault-setup ]]; then
+  ln -sfn /opt/immutavault/current/bin/immutavault-setup /usr/local/bin/immutavault-setup
+else
+  rm -f /usr/local/bin/immutavault-setup
+fi
 if systemctl is-enabled --quiet immutavault-portal.service 2>/dev/null || systemctl is-active --quiet immutavault-portal.service 2>/dev/null; then
   systemctl try-restart immutavault-portal.service
 fi

@@ -28,6 +28,7 @@ print(f"Runtime dependencies OK for Immutavault {immutavault.__version__}")
 PY
 "$TARGET/bin/python" -m compileall -q "$TARGET/lib"
 "$TARGET/bin/immutavault" --help >/dev/null
+"$TARGET/bin/immutavault-setup" --help >/dev/null
 
 # Validate the installed production configuration before changing the live symlink.
 if [[ -f /etc/immutavault/immutavault.yml ]]; then
@@ -42,6 +43,7 @@ PREVIOUS=$(readlink -f "$CURRENT" 2>/dev/null || true)
 ln -sfn "$TARGET" "${CURRENT}.new"
 mv -Tf "${CURRENT}.new" "$CURRENT"
 ln -sfn "$CURRENT/bin/immutavault" /usr/local/bin/immutavault
+ln -sfn "$CURRENT/bin/immutavault-setup" /usr/local/bin/immutavault-setup
 printf '%s\n' "$PREVIOUS" > /opt/immutavault/previous-release
 
 # Only the long-running portal needs a restart. Timers/oneshots use the new

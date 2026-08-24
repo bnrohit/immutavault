@@ -56,3 +56,18 @@ platforms: []
     loaded = load_config(cfg)
     assert loaded.runtime.state_backup_keep == 42
     assert loaded.runtime.state_backup_path.endswith("state-backups")
+
+
+def test_rpo_target_minutes_is_validated(tmp_path):
+    import yaml
+    from immutavault.config import load_config
+    cfg = {
+        "repository": {"url": "rest:https://vault/", "local_path": "/tmp/repo", "staging_path": "/tmp/stage", "retention": {"keep_within_days": 30}},
+        "runtime": {}, "protection": {"preserve_suspicious_points_days": 90, "rpo_target_minutes": 60},
+        "portal": {"enabled": False, "users": []}, "platforms": [], "replicas": []}
+    path = tmp_path / "c.yml"; path.write_text(yaml.safe_dump(cfg))
+    assert load_config(path).protection.rpo_target_minutes == 60
+    cfg["protection"]["rpo_target_minutes"] = 0; path.write_text(yaml.safe_dump(cfg))
+    import pytest
+    with pytest.raises(ValueError, match="rpo_target_minutes"):
+        load_config(path)

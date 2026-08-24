@@ -29,6 +29,8 @@ runtime:
   state_backup_keep: 288
 
 protection:
+  # Dashboard/audit target. Match this to the enabled backup schedule.
+  rpo_target_minutes: 1440
   anomaly_data_added_ratio: 0.70
   anomaly_size_change_ratio: 0.50
   preserve_suspicious_points_days: 90
