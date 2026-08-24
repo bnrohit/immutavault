@@ -85,6 +85,17 @@ class PortalConfig:
 
 
 @dataclass(frozen=True)
+class FLRConfig:
+    enabled: bool = True
+    mount_root: str = "/srv/immutavault/flr"
+    session_ttl_minutes: int = 30
+    max_download_bytes: int = 5 * 1024 * 1024 * 1024
+    max_sessions_per_user: int = 2
+    max_disks: int = 16
+    mount_wait_seconds: int = 30
+
+
+@dataclass(frozen=True)
 class ReplicaConfig:
     name: str
     backend: str = "rest"  # rest, filesystem, s3
@@ -123,6 +134,7 @@ class Config:
     platforms: list[PlatformConfig]
     protection: ProtectionConfig = field(default_factory=ProtectionConfig)
     portal: PortalConfig = field(default_factory=PortalConfig)
+    flr: FLRConfig = field(default_factory=FLRConfig)
     replicas: list[ReplicaConfig] = field(default_factory=list)
     dr: DRConfig = field(default_factory=DRConfig)
 
@@ -146,6 +158,7 @@ def load_config(path: str | Path) -> Config:
     runtime_raw = raw.get("runtime") or {}
     protection_raw = raw.get("protection") or {}
     portal_raw = raw.get("portal") or {}
+    flr_raw = raw.get("flr") or {}
     platforms_raw = raw.get("platforms") or []
     replicas_raw = raw.get("replicas") or []
     dr_raw = raw.get("disaster_recovery") or {}
@@ -240,6 +253,34 @@ def load_config(path: str | Path) -> Config:
         tls_cert=portal_raw.get("tls_cert"),
         tls_key=portal_raw.get("tls_key"),
         users=users,
+    )
+
+    flr_mount_root = str(flr_raw.get("mount_root", "/srv/immutavault/flr"))
+    if not flr_mount_root.startswith("/"):
+        raise ValueError("flr.mount_root must be an absolute path")
+    flr_ttl = _positive_int(flr_raw.get("session_ttl_minutes", 30), "flr.session_ttl_minutes", minimum=1)
+    if flr_ttl > 240:
+        raise ValueError("flr.session_ttl_minutes must be <= 240")
+    flr_download = _positive_int(flr_raw.get("max_download_bytes", 5 * 1024 * 1024 * 1024), "flr.max_download_bytes", minimum=1)
+    if flr_download > 1024 * 1024 * 1024 * 1024:
+        raise ValueError("flr.max_download_bytes must be <= 1 TiB")
+    flr_sessions = _positive_int(flr_raw.get("max_sessions_per_user", 2), "flr.max_sessions_per_user", minimum=1)
+    if flr_sessions > 16:
+        raise ValueError("flr.max_sessions_per_user must be <= 16")
+    flr_disks = _positive_int(flr_raw.get("max_disks", 16), "flr.max_disks", minimum=1)
+    if flr_disks > 64:
+        raise ValueError("flr.max_disks must be <= 64")
+    flr_wait = _positive_int(flr_raw.get("mount_wait_seconds", 30), "flr.mount_wait_seconds", minimum=1)
+    if flr_wait > 180:
+        raise ValueError("flr.mount_wait_seconds must be <= 180")
+    flr = FLRConfig(
+        enabled=bool(flr_raw.get("enabled", True)),
+        mount_root=flr_mount_root,
+        session_ttl_minutes=flr_ttl,
+        max_download_bytes=flr_download,
+        max_sessions_per_user=flr_sessions,
+        max_disks=flr_disks,
+        mount_wait_seconds=flr_wait,
     )
 
     platforms: list[PlatformConfig] = []
@@ -354,6 +395,7 @@ def load_config(path: str | Path) -> Config:
         platforms=platforms,
         protection=protection,
         portal=portal,
+        flr=flr,
         replicas=replicas,
         dr=dr,
     )
