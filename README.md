@@ -1,12 +1,12 @@
-# Immutavault v0.5.1
+# Immutavault v0.6.0
 
 Immutavault is an open, vendor-neutral **immutable VM backup, recovery, replication and disaster-recovery orchestrator** for VMware/vCenter, Proxmox VE and XCP-ng. It can run on a dedicated Linux server or Linux VM and use local RAID/ZFS, NFS/SMB/NAS, a second Immutavault vault, or S3-compatible object storage for additional recovery copies.
 
 The security principle is simple: **the identity that creates backups does not receive prune/delete authority.** The normal controller writes through an append-only REST service; a separate root-only maintenance path performs expiration. Recovery is similarly conservative: customers can choose recovery points, but Immutavault restores as a **new VM** and refuses implicit production overwrite.
 
-> **Readiness statement:** v0.5.1 has a repeatable local release suite plus a live restic/rest-server data-plane CI test covering configuration, storage policy, recovery control, systemd assets, installers, VMware/Proxmox/XCP-ng adapter behavior, DR fencing/quorum/network planning and packaging. It is a production **pilot candidate**, not a blanket certification for every server, hypervisor release, guest OS or network. Production acceptance requires the live tests in `docs/PRODUCTION_ACCEPTANCE.md` on the actual environment.
+> **Readiness statement:** v0.6.0 retains the repeatable release suite and live restic/rest-server data-plane CI test from v0.5.1 and adds a guided setup console for hypervisors, exact VM selection, storage/cloud, and staged DR configuration. The release suite covers configuration, storage policy, recovery control, systemd assets, installers, VMware/Proxmox/XCP-ng adapter behavior, DR fencing/quorum/network planning, packaging, and setup-console safety. It is a production **pilot candidate**, not a blanket certification for every server, hypervisor release, guest OS, storage platform, or network. Production acceptance requires the live tests in `docs/PRODUCTION_ACCEPTANCE.md` on the actual environment.
 
-## What v0.5.1 includes
+## What v0.6.0 includes
 
 - VMware/vCenter inventory and **hot snapshot -> powered-off temporary clone -> OVF export** backup path, keeping the protected VM running. Strict quiesce policy is configurable; no silent crash-consistent fallback unless explicitly allowed.
 - Proxmox inventory, online `vzdump --mode snapshot`, safe `qmrestore`/`pct restore`, and cleanup guards.
@@ -31,6 +31,8 @@ The security principle is simple: **the identity that creates backups does not r
 - Two-site DR orchestration with explicit fencing, maintenance suppression, probe quorum, VXLAN recovery VLANs, FRR/OSPF route ownership, boot order, workload health checks, failover and planned failback.
 - Same-IP DR for explicitly configured stretched recovery VLANs: only the active site owns the gateway IP and advertises the subnet.
 - Automatic cross-hypervisor conversion is **blocked** until a conversion path is separately certified.
+- Guided browser setup for non-IT operators: test/add hypervisors, discover/check VMs, add/test/init storage, stage/map DR, preview/prepare VXLAN/OSPF, health-check and start backup schedules.
+- Per-platform Proxmox/XCP-ng SSH key references, so primary and DR hosts can use different credentials.
 
 ## Recommended production topology
 
@@ -71,15 +73,19 @@ The easiest dedicated appliance install is:
 ```bash
 git clone https://github.com/bnrohit/immutavault.git
 cd immutavault
+git checkout v0.6.0
 sudo ./scripts/preflight.sh
 sudo ./scripts/install.sh --role all --repo-root /srv/immutavault
+sudo ./scripts/launch_setup_console.sh
 ```
+
+The last command starts the **Guided Setup Console**. Open `https://<vault-ip>:8788/`, paste the printed one-time token, and follow five steps: **Hypervisor → Select VMs → Storage/Cloud → DR Site → Test & Start**. Remote setup requires TLS, secrets are kept out of YAML, and automatic DR failover remains disabled. See `docs/SETUP_CONSOLE.md`.
 
 The all/repository installer can fetch **pinned rest-server v0.14.0 from the official upstream GitHub release and verifies its SHA-256 before installation**. Use `--no-rest-server-download` if your change-control policy requires supplying the binary yourself.
 
 Nothing partitions or formats disks automatically.
 
-After editing `/etc/immutavault/immutavault.yml` and `/etc/immutavault/immutavault.env`:
+If you prefer the CLI/manual path instead of the guided console, edit `/etc/immutavault/immutavault.yml` and `/etc/immutavault/immutavault.env`, then run:
 
 ```bash
 sudo -u immutavault bash -c '
@@ -258,6 +264,7 @@ These are deliberate safety boundaries rather than marketing claims.
 ## Documentation
 
 - `docs/QUICKSTART.md` - lab quick start
+- `docs/SETUP_CONSOLE.md` - guided browser configuration for non-IT operators
 - `docs/INSTALLATION.md` - production installation
 - `docs/PRODUCTION_ACCEPTANCE.md` - go-live gates
 - `docs/OPERATIONS.md` - day-2 operations
