@@ -138,7 +138,7 @@ replicas:
     assert r2.object_lock_enabled is False
 
 
-def test_r2_bucket_lock_preserves_stronger_rules(monkeypatch):
+def test_r2_bucket_lock_upgrades_legacy_age_rules_for_deduplicated_repo(monkeypatch):
     from immutavault.storage import ensure_r2_bucket_lock
     cfg = ReplicaConfig(
         name="r2", backend="s3", provider="cloudflare_r2",
@@ -155,13 +155,41 @@ def test_r2_bucket_lock_preserves_stronger_rules(monkeypatch):
     calls = []
     def fake_api(cfg, method, payload=None):
         calls.append((method, payload))
+        return {"rules": existing if method == "GET" else payload["rules"]}
+    monkeypatch.setattr("immutavault.storage._r2_api", fake_api)
+    result = ensure_r2_bucket_lock(cfg, minimum_days=60)
+    assert result["changed"] is True
+    assert result["transient_prefix_excluded"] == "prod/locks/"
+    assert len(result["rules"]) == 5
+    assert [c[0] for c in calls] == ["GET", "PUT"]
+    for rule in result["rules"]:
+        assert rule["condition"]["type"] == "Date"
+        assert "date" in rule["condition"]
+
+
+def test_r2_bucket_lock_preserves_indefinite_rules(monkeypatch):
+    from immutavault.storage import ensure_r2_bucket_lock
+    cfg = ReplicaConfig(
+        name="r2", backend="s3", provider="cloudflare_r2",
+        endpoint="https://abc.r2.cloudflarestorage.com", bucket="vault", prefix="prod",
+        r2_bucket_lock_enabled=True, r2_bucket_lock_days=30,
+    )
+    suffixes = ["data", "index", "snapshots", "keys", "config"]
+    namespaces = ["data/", "index/", "snapshots/", "keys/", "config"]
+    existing = [
+        {"id": f"immutavault-retention-{suffix}", "enabled": True, "prefix": f"prod/{namespace}",
+         "condition": {"type": "Indefinite"}}
+        for suffix, namespace in zip(suffixes, namespaces)
+    ]
+    calls = []
+    def fake_api(cfg, method, payload=None):
+        calls.append((method, payload))
         return {"rules": existing}
     monkeypatch.setattr("immutavault.storage._r2_api", fake_api)
     result = ensure_r2_bucket_lock(cfg, minimum_days=60)
     assert result["changed"] is False
-    assert result["transient_prefix_excluded"] == "prod/locks/"
-    assert len(result["rules"]) == 5
     assert [c[0] for c in calls] == ["GET"]
+    assert all(r["condition"]["type"] == "Indefinite" for r in result["rules"])
 
 
 def test_r2_bucket_lock_adds_persistent_namespace_rules(monkeypatch):

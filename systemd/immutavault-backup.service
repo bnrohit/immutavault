@@ -4,6 +4,7 @@ After=network-online.target immutavault-rest-server.service
 Wants=network-online.target
 
 [Service]
+UMask=0077
 Type=oneshot
 User=immutavault
 Group=immutavault

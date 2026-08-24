@@ -54,6 +54,10 @@ class Portal:
         users = self.users()
         if not users:
             raise RuntimeError("portal has no active users: configure portal.users and set their token_env variables")
+        listen = self.cfg.portal.listen.strip()
+        loopback = listen in {"127.0.0.1", "::1", "localhost"}
+        if not loopback and not (self.cfg.portal.tls_cert and self.cfg.portal.tls_key):
+            raise RuntimeError("portal refuses non-loopback plaintext exposure; configure tls_cert/tls_key or bind to loopback")
         portal = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -69,6 +73,9 @@ class Portal:
                 self.send_header("Content-Length", str(len(payload)))
                 self.send_header("Cache-Control", "no-store")
                 self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("X-Frame-Options", "DENY")
+                self.send_header("Referrer-Policy", "no-referrer")
+                self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
                 self.end_headers()
                 self.wfile.write(payload)
 
@@ -107,6 +114,7 @@ class Portal:
                     payload = UI.encode(); self.send_response(200)
                     self.send_header("Content-Type", "text/html; charset=utf-8"); self.send_header("Content-Length", str(len(payload)))
                     self.send_header("Cache-Control", "no-store"); self.send_header("Content-Security-Policy", "default-src 'self' 'unsafe-inline'; object-src 'none'; frame-ancestors 'none'")
+                    self.send_header("X-Frame-Options", "DENY"); self.send_header("Referrer-Policy", "no-referrer"); self.send_header("X-Content-Type-Options", "nosniff")
                     self.end_headers(); self.wfile.write(payload); return
                 user = self._require({"viewer", "restore_operator", "approver", "admin"})
                 if not user: return
@@ -142,7 +150,8 @@ class Portal:
                         self._json(200 if ok else 409, {"valid": ok, "errors": errors}); return
                     self._json(404, {"error": "not found"})
                 except Exception as exc:
-                    self._json(500, {"error": str(exc)})
+                    print(f"portal internal GET error: {type(exc).__name__}: {exc}")
+                    self._json(500, {"error": "internal server error"})
 
             def do_POST(self) -> None:
                 parsed = urlparse(self.path)
@@ -183,7 +192,8 @@ class Portal:
                 except (ValueError, PermissionError) as exc:
                     self._json(400 if isinstance(exc, ValueError) else 403, {"error": str(exc)})
                 except Exception as exc:
-                    self._json(500, {"error": str(exc)})
+                    print(f"portal internal POST error: {type(exc).__name__}: {exc}")
+                    self._json(500, {"error": "internal server error"})
 
         httpd = ThreadingHTTPServer((self.cfg.portal.listen, self.cfg.portal.port), Handler)
         if self.cfg.portal.tls_cert and self.cfg.portal.tls_key:

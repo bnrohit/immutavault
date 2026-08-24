@@ -30,10 +30,17 @@ PY
 pass "version metadata consistent: $VERSION"
 
 # Never ship runtime secrets, TLS private keys, catalogs, or backup payloads.
-if git ls-files | grep -E '(^|/)(\.env|.*\.key|state.*\.db)$|(^|/)(staging|output)/' >/dev/null; then
-  fail 'tracked runtime secret/state/staging file detected'
+# `git archive` source packages intentionally have no .git directory, so support both
+# a normal clone and the release tarball used for offline validation.
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  FILE_LIST=$(git ls-files)
+else
+  FILE_LIST=$(find . -type f -not -path './.pytest_cache/*' -not -path './dist/*' -not -path './build/*' -printf '%P\n')
 fi
-pass 'no runtime secrets/state/staging tracked'
+if printf '%s\n' "$FILE_LIST" | grep -E '(^|/)(\.env|.*\.key|state.*\.db)$|(^|/)(staging|output)/' >/dev/null; then
+  fail 'tracked/shipped runtime secret/state/staging file detected'
+fi
+pass 'no runtime secrets/state/staging shipped'
 
 python3 -m compileall -q src tests
 pass 'Python source/tests compile'
@@ -85,13 +92,18 @@ print(immutavault.__version__)
 PY
 pass 'built wheel imports and loads production configuration'
 
-# Static install contract: the all-in-one role must install a verified rest-server or fail closed.
+# Static install contract: the all-in-one role must install verified data-plane
+# binaries or fail closed.
+grep -q './scripts/install_restic.sh' scripts/install.sh || fail 'all-in-one installer lacks verified restic path'
+grep -q 'sha256sum --check --status' scripts/install_restic.sh || fail 'restic installer lacks checksum verification'
+grep -q 'check_restic.sh' scripts/preflight.sh || fail 'preflight lacks restic compatibility gate'
 grep -q './scripts/install_rest_server.sh' scripts/install.sh || fail 'all-in-one installer lacks verified rest-server path'
 grep -q 'sha256sum --check --status' scripts/install_rest_server.sh || fail 'rest-server installer lacks checksum verification'
 grep -q 'check_rest_server.sh' scripts/install_repository.sh || fail 'repository installer lacks rest-server compatibility gate'
 grep -q -- '--append-only' scripts/check_rest_server.sh || fail 'rest-server compatibility gate lacks append-only check'
 grep -q -- '--tls-min-ver' scripts/check_rest_server.sh || fail 'rest-server compatibility gate lacks hardened TLS check'
 ! grep -q 'does NOT download rest-server binaries' scripts/install_appliance.sh || fail 'appliance documentation still contains obsolete rest-server download statement'
-pass 'third-party repository daemon install is pinned, checksummed, and capability-gated'
+grep -q 'EnvironmentFile=/etc/immutavault/repository.env' systemd/immutavault-rest-server.service || fail 'rest-server still receives controller environment'
+pass 'restic/rest-server installs are pinned, checksummed, capability-gated, and privilege-separated'
 
 printf '\nALL RELEASE CHECKS PASSED for Immutavault %s\n' "$VERSION"

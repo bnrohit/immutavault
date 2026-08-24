@@ -64,6 +64,13 @@ class VMwareAdapter(Adapter):
             return problems
         if bool(self.cfg.options.get("insecure", False)):
             problems.append("VMware TLS verification is disabled (options.insecure=true); use a trusted CA/known-hosts file for production")
+        for command in ("snapshot.create", "vm.clone", "export.ovf", "import.ovf"):
+            help_probe = run(["govc", command, "-h"], timeout=30, env=env, check=False)
+            if help_probe.returncode != 0:
+                problems.append(f"installed govc lacks required command/capability: {command}")
+        import_help = run(["govc", "import.ovf", "-h"], timeout=30, env=env, check=False)
+        if import_help.returncode == 0 and "-net" not in (import_help.stdout + import_help.stderr):
+            problems.append("installed govc import.ovf lacks -net mapping; upgrade govc before DR network remapping")
         mode = self.cfg.mode.lower()
         if mode in {"cbt", "vddk"}:
             problems.append("VDDK/CBT transport is selected but no tested VDDK transport plugin is installed")
@@ -167,6 +174,12 @@ class VMwareAdapter(Adapter):
             raise RuntimeError("no OVF descriptor found in VMware recovery point")
         ovf = ovfs[0]
         cmd = ["govc", "import.ovf", "-name", target_name]
+        # Modern govc supports -net for the common single-network OVF case. This is
+        # important for DR because exported distributed-portgroup references may not exist
+        # in a different vCenter. Multi-network VMs can still use a generated import-spec
+        # JSON through options_json.
+        if options.get("network"):
+            cmd += ["-net", str(options["network"])]
         if options.get("options_json"):
             cmd += ["-options", str(options["options_json"])]
         cmd.append(str(ovf))

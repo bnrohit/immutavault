@@ -33,6 +33,16 @@ class XCPNGAdapter(Adapter):
             return ["ssh/scp is not installed"]
         result = run(self._ssh() + ["xe host-list params=uuid --minimal"], timeout=30, check=False)
         problems = [] if result.returncode == 0 else [f"cannot reach XCP-ng xe CLI: {result.stderr.strip()}"]
+        if result.returncode == 0:
+            capabilities = run(
+                self._ssh() + [
+                    "for c in vm-snapshot snapshot-export-to-template snapshot-uninstall vm-import vm-install template-uninstall; "
+                    "do xe help \"$c\" >/dev/null || exit 42; done"
+                ],
+                timeout=60, check=False,
+            )
+            if capabilities.returncode != 0:
+                problems.append("XCP-ng xe CLI is missing one or more required snapshot/export/import/template commands")
         if self.cfg.mode.lower() in {"xe-export", "cold-export"}:
             problems.append("XCP-ng direct xe vm-export is configured; use mode=snapshot-export for running production VMs")
         elif self.cfg.mode.lower() not in {"snapshot-export", "xe-snapshot-export", "snapshot"}:
@@ -80,12 +90,17 @@ class XCPNGAdapter(Adapter):
                 snapshot_uuid = result.stdout.strip()
                 if not snapshot_uuid:
                     raise RuntimeError(f"XCP-ng snapshot returned no UUID for {vm.name}")
-                export_uuid = snapshot_uuid
+                run(
+                    self._ssh() + [
+                        f"xe snapshot-export-to-template snapshot-uuid={shlex.quote(snapshot_uuid)} "
+                        f"filename={shlex.quote(remote)} preserve-power-state=false"
+                    ],
+                    timeout=self.timeout,
+                )
             elif mode in {"xe-export", "cold-export"}:
-                export_uuid = vm.id
+                run(self._ssh() + [f"xe vm-export uuid={shlex.quote(vm.id)} filename={shlex.quote(remote)}"], timeout=self.timeout)
             else:
                 raise ValueError(f"unsupported XCP-ng backup mode: {self.cfg.mode}")
-            run(self._ssh() + [f"xe vm-export uuid={shlex.quote(export_uuid)} filename={shlex.quote(remote)}"], timeout=self.timeout)
             run(self._scp() + [f"{target}:{remote}", str(out)], timeout=self.timeout)
             return out
         finally:
@@ -97,6 +112,14 @@ class XCPNGAdapter(Adapter):
                 )
 
     def restore(self, source: Path, *, target_name: str, options: dict[str, Any], dry_run: bool = False) -> dict[str, Any]:
+        """Restore an XVA as a new VM without overwriting an existing workload.
+
+        Snapshot-mode backups are exported with XCP-ng's supported
+        ``snapshot-export-to-template`` command. Importing that XVA therefore yields a
+        template, not a directly bootable VM. We detect that case, instantiate a new VM
+        with ``vm-install``, then remove the temporary imported template. Historical XVA
+        backups that import directly as VMs remain supported as well.
+        """
         xvas = sorted(source.rglob("*.xva"))
         if not xvas:
             raise RuntimeError("no XVA archive found in XCP-ng recovery point")
@@ -104,22 +127,62 @@ class XCPNGAdapter(Adapter):
         remote = f"/var/tmp/immutavault-restore-{safe_component(xva.name)}"
         target = self._ssh()[-1]
         sr_uuid = str(options.get("sr_uuid") or self.cfg.options.get("restore_sr_uuid") or "").strip()
-        cmd = f"xe vm-import filename={shlex.quote(remote)} preserve=false"
+        import_cmd = f"xe vm-import filename={shlex.quote(remote)} preserve=false"
         if sr_uuid:
-            cmd += f" sr-uuid={shlex.quote(sr_uuid)}"
+            import_cmd += f" sr-uuid={shlex.quote(sr_uuid)}"
         if dry_run:
-            return {"platform": self.cfg.name, "name": target_name, "xva": str(xva), "command": cmd}
+            install_cmd = f"xe vm-install template-uuid=<imported-template-uuid> new-name-label={shlex.quote(target_name)}"
+            if sr_uuid:
+                install_cmd += f" sr-uuid={shlex.quote(sr_uuid)}"
+            return {
+                "platform": self.cfg.name,
+                "name": target_name,
+                "xva": str(xva),
+                "import_command": import_cmd,
+                "template_install_command": install_cmd,
+            }
         existing = run(self._ssh() + [f"xe vm-list name-label={shlex.quote(target_name)} --minimal"], timeout=60, check=False)
         if existing.returncode == 0 and existing.stdout.strip():
             raise RuntimeError(f"VM {target_name!r} already exists; Immutavault refuses overwrite")
         run(self._scp() + [str(xva), f"{target}:{remote}"], timeout=self.timeout)
+        imported_uuid = ""
+        imported_template = False
+        uuid = ""
         try:
-            result = run(self._ssh() + [cmd], timeout=self.timeout)
-            uuid = result.stdout.strip()
-            if uuid:
-                run(self._ssh() + [f"xe vm-param-set uuid={shlex.quote(uuid)} name-label={shlex.quote(target_name)}"], timeout=60)
+            result = run(self._ssh() + [import_cmd], timeout=self.timeout)
+            imported_uuid = result.stdout.strip()
+            if not imported_uuid:
+                raise RuntimeError("XCP-ng vm-import returned no UUID")
+            kind = run(
+                self._ssh() + [f"xe vm-param-get uuid={shlex.quote(imported_uuid)} param-name=is-a-template"],
+                timeout=60,
+            ).stdout.strip().lower()
+            imported_template = kind == "true"
+            if imported_template:
+                install_cmd = (
+                    f"xe vm-install template-uuid={shlex.quote(imported_uuid)} "
+                    f"new-name-label={shlex.quote(target_name)}"
+                )
+                if sr_uuid:
+                    install_cmd += f" sr-uuid={shlex.quote(sr_uuid)}"
+                installed = run(self._ssh() + [install_cmd], timeout=self.timeout)
+                uuid = installed.stdout.strip()
+                if not uuid:
+                    raise RuntimeError("XCP-ng vm-install returned no VM UUID")
+            else:
+                uuid = imported_uuid
+                run(
+                    self._ssh() + [f"xe vm-param-set uuid={shlex.quote(uuid)} name-label={shlex.quote(target_name)}"],
+                    timeout=60,
+                )
         finally:
             run(self._ssh() + [f"rm -f {shlex.quote(remote)}"], timeout=300, check=False)
+            if imported_template and imported_uuid:
+                run(
+                    self._ssh() + [f"xe template-uninstall template-uuid={shlex.quote(imported_uuid)} --force"],
+                    timeout=self.timeout,
+                    check=False,
+                )
         return {"platform": self.cfg.name, "uuid": uuid, "name": target_name}
 
     def power_on(self, restored: dict[str, Any], *, dry_run: bool = False) -> dict[str, Any]:

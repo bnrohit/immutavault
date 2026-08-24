@@ -12,7 +12,8 @@ if [[ $EUID -ne 0 ]]; then
   exit 1
 fi
 
-command -v restic >/dev/null || { echo "Install restic first (apt install restic)" >&2; exit 1; }
+command -v restic >/dev/null || { echo "Install restic first" >&2; exit 1; }
+"$(dirname "$0")/check_restic.sh" "$(command -v restic)"
 command -v rest-server >/dev/null || { echo "Install rest-server first and place it in PATH" >&2; exit 1; }
 "$(dirname "$0")/check_rest_server.sh" "$(command -v rest-server)"
 
@@ -22,6 +23,11 @@ install -d -o root -g root -m 0755 "$ROOT"
 install -d -o root -g immutavault-store -m 0770 "$REPO"
 install -d -o immutavault -g immutavault -m 0750 "$STAGING" "$ROOT/restore-staging" "$ROOT/verify-staging" "$STATE_DIR"
 install -d -o root -g root -m 0755 "$CONFIG_DIR" "$CONFIG_DIR/tls"
+# Storage daemon gets only its non-secret repository root. Never pass the controller's
+# RESTIC_PASSWORD, portal tokens, hypervisor credentials, or cloud credentials to rest-server.
+printf 'IMMUTAVAULT_REPO_ROOT=%s\n' "$ROOT" > "$CONFIG_DIR/repository.env"
+chown root:root "$CONFIG_DIR/repository.env"
+chmod 600 "$CONFIG_DIR/repository.env"
 
 if [[ ! -f "$CONFIG_DIR/immutavault.env" ]]; then
   umask 077

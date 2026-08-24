@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import json
+import re
 from pathlib import Path
 import shutil
 from typing import Any
 
+from . import __version__
 from .adapters import build_adapter
 from .adapters.base import VM
 from .anomaly import detect_backup_anomaly
@@ -13,6 +15,7 @@ from .config import Config, PlatformConfig, ReplicaConfig
 from .integrity import build_manifest, verify_manifest
 from .lock import exclusive_lock
 from .restic import ResticRepository
+from .runner import run
 from .state import StateDB
 from .storage import apply_object_lock, ensure_r2_bucket_lock, r2_bucket_lock_status, restic_target_url
 from .util import safe_component
@@ -30,8 +33,20 @@ class BackupEngine:
 
     def doctor(self) -> dict[str, list[str]]:
         results: dict[str, list[str]] = {"repository": []}
-        if shutil.which("restic") is None:
+        restic_bin = shutil.which("restic")
+        if restic_bin is None:
             results["repository"].append("restic is not installed")
+        else:
+            version = run([restic_bin, "version"], timeout=30, check=False)
+            match = re.search(r"restic (\d+)\.(\d+)\.(\d+)", version.stdout + version.stderr)
+            if version.returncode != 0 or not match:
+                results["repository"].append("restic version/capability probe failed")
+            else:
+                parsed = tuple(int(x) for x in match.groups())
+                if parsed < (0, 19, 1):
+                    results["repository"].append(
+                        f"restic {'.'.join(map(str, parsed))} is older than the tested minimum 0.19.1"
+                    )
         staging = Path(self.cfg.repository.staging_path)
         try:
             staging.mkdir(parents=True, exist_ok=True)
@@ -139,7 +154,7 @@ class BackupEngine:
             summary = self.repo.backup(
                 str(staging_root),
                 tags=[
-                    "immutavault:v0.5", f"platform:{platform.type}", f"source:{platform.name}",
+                    f"immutavault:v{__version__}", f"platform:{platform.type}", f"source:{platform.name}",
                     f"vm-id:{vm.id}", f"vm:{vm.name}", f"vm-kind:{vm.kind}",
                 ],
             )

@@ -203,7 +203,9 @@ replicas:
     object_lock_days: 30
 
   # Cloudflare R2 is S3-compatible. Its S3 API does not expose S3 Object Lock,
-  # but Immutavault can configure Cloudflare-native Bucket Locks using the admin CLI.
+  # but Immutavault can configure Cloudflare-native Bucket Locks. For a deduplicated repository,
+  # the controller refreshes a Date-based lock horizon after every successful R2 copy. The
+  # Cloudflare API token is therefore required at runtime when this protection is enabled.
   - name: "cloudflare-r2"
     enabled: false
     backend: "s3"

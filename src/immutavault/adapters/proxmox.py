@@ -37,6 +37,13 @@ class ProxmoxAdapter(Adapter):
         result = run(self._ssh() + ["pvesh get /version --output-format json"], timeout=30, check=False)
         if result.returncode != 0:
             problems.append(f"cannot reach Proxmox API over SSH: {result.stderr.strip()}")
+            return problems
+        capabilities = run(
+            self._ssh() + ["for c in pvesh vzdump qmrestore pct qm; do command -v \"$c\" >/dev/null || exit 41; done"],
+            timeout=30, check=False,
+        )
+        if capabilities.returncode != 0:
+            problems.append("Proxmox node is missing one or more required commands: pvesh, vzdump, qmrestore, pct, qm")
         return problems
 
     def platform_info(self) -> dict[str, Any]:

@@ -59,8 +59,8 @@ Do these with a disposable/non-critical VM first.
 ### XCP-ng
 
 - Dedicated SSH identity works non-interactively.
-- `snapshot-export` creates/removes the temporary snapshot correctly.
-- XVA imports to the configured recovery SR.
+- `snapshot-export` creates/removes the temporary snapshot correctly and exports it through `snapshot-export-to-template`.
+- XVA imports as a temporary template, `vm-install` creates the bootable recovery VM on the configured SR, and the imported template is removed.
 - Restored workload boots isolated and application checks pass.
 
 ## Phase 4 - replica/cloud/NAS
@@ -73,7 +73,7 @@ For every enabled replica:
 4. Destination snapshot listing confirms the exact snapshot ID exists.
 5. Restore **from that replica** succeeds.
 6. For S3 Object Lock providers, provider retention status is read back and deletion is tested with a disposable object/snapshot according to provider policy.
-7. For R2, native Bucket Lock rules are verified on persistent restic namespaces; transient `locks/` is not retention-locked.
+7. For R2, native Bucket Lock **Date** rules are verified on persistent restic namespaces, the horizon is refreshed after another successful copy, and transient `locks/` is not retention-locked. Confirm operators understand R2 locks are admin-mutable and are not S3 Compliance Object Lock.
 8. For NFS/SMB, unmount/remount and server reboot behavior is tested and mount dependency is monitored.
 
 ## Phase 5 - scheduler/reboot

@@ -5,6 +5,7 @@ Wants=network-online.target
 StartLimitIntervalSec=0
 
 [Service]
+UMask=0077
 Type=simple
 User=immutavault
 Group=immutavault

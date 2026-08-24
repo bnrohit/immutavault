@@ -1,17 +1,18 @@
-# Immutavault v0.5.0
+# Immutavault v0.5.1
 
 Immutavault is an open, vendor-neutral **immutable VM backup, recovery, replication and disaster-recovery orchestrator** for VMware/vCenter, Proxmox VE and XCP-ng. It can run on a dedicated Linux server or Linux VM and use local RAID/ZFS, NFS/SMB/NAS, a second Immutavault vault, or S3-compatible object storage for additional recovery copies.
 
 The security principle is simple: **the identity that creates backups does not receive prune/delete authority.** The normal controller writes through an append-only REST service; a separate root-only maintenance path performs expiration. Recovery is similarly conservative: customers can choose recovery points, but Immutavault restores as a **new VM** and refuses implicit production overwrite.
 
-> **Readiness statement:** v0.5.0 has a repeatable local release suite covering configuration, storage policy, recovery control, systemd assets, installers, VMware/Proxmox/XCP-ng adapter behavior, DR fencing/quorum/network planning and packaging. It is a production **pilot candidate**, not a blanket certification for every server, hypervisor release, guest OS or network. Production acceptance requires the live tests in `docs/PRODUCTION_ACCEPTANCE.md` on the actual environment.
+> **Readiness statement:** v0.5.1 has a repeatable local release suite plus a live restic/rest-server data-plane CI test covering configuration, storage policy, recovery control, systemd assets, installers, VMware/Proxmox/XCP-ng adapter behavior, DR fencing/quorum/network planning and packaging. It is a production **pilot candidate**, not a blanket certification for every server, hypervisor release, guest OS or network. Production acceptance requires the live tests in `docs/PRODUCTION_ACCEPTANCE.md` on the actual environment.
 
-## What v0.5.0 includes
+## What v0.5.1 includes
 
 - VMware/vCenter inventory and **hot snapshot -> powered-off temporary clone -> OVF export** backup path, keeping the protected VM running. Strict quiesce policy is configurable; no silent crash-consistent fallback unless explicitly allowed.
 - Proxmox inventory, online `vzdump --mode snapshot`, safe `qmrestore`/`pct restore`, and cleanup guards.
-- XCP-ng inventory, snapshot-based XVA export and safe XVA import.
+- XCP-ng inventory, supported snapshot-to-template XVA export, template-aware import/`vm-install`, and cleanup of the temporary recovery template.
 - Encrypted, deduplicated restic repository.
+- Pinned/SHA-256-verified restic 0.19.1 and capability-gated rest-server 0.14.0 install paths.
 - Authenticated TLS `rest-server` append-only writer endpoint.
 - Separate `immutavault` controller and `immutavault-store` repository OS identities.
 - Root-only GFS retention/prune with immutable-catalog protection.
@@ -22,7 +23,7 @@ The security principle is simple: **the identity that creates backups does not r
 - Customer recovery portal/API, scoped roles, four-eyes approval and restore-source selection.
 - S3-compatible replicas: Wasabi, IDrive e2, Backblaze B2, AWS S3, MinIO, Ceph and custom endpoints.
 - S3 Object Lock support where the provider implements it.
-- Cloudflare R2 support with Cloudflare-native Bucket Locks, kept distinct from S3 Object Lock.
+- Cloudflare R2 support with Cloudflare-native Bucket Locks using a rolling **Date** horizon refreshed after successful copies; kept distinct from S3 Compliance Object Lock.
 - Filesystem replicas for NFS/SMB/TrueNAS/Dell or other mounted storage.
 - Online SQLite control-plane backups every five minutes.
 - Versioned application installs, atomic symlink upgrade and rollback.
@@ -264,6 +265,7 @@ These are deliberate safety boundaries rather than marketing claims.
 - `docs/DR_RUNBOOK.md` - failover/failback
 - `docs/HIGH_AVAILABILITY.md` - control-plane and data-plane HA
 - `docs/VMWARE_BACKUP.md` - VMware hot backup behavior
+- `docs/REALTIME_READINESS.md` - exact RPO/RTO and live-data-plane boundaries
 - `docs/CLOUD_STORAGE.md` - S3/NFS/SMB targets
 - `docs/SECURITY.md` - security model
 - `docs/ARCHITECTURE.md` - components/trust boundaries

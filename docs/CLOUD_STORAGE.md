@@ -1,6 +1,6 @@
 # Cloud and NAS Storage Fabric
 
-Immutavault v0.5 uses a tiered repository model:
+Immutavault v0.5.1 uses a tiered repository model:
 
 1. **Primary vault** — append-only `rest-server` backed by local RAID/ZFS/XFS/ext4 or by a mounted enterprise NFS/SMB filesystem.
 2. **Replica targets** — one or more independently encrypted restic repositories on S3-compatible object storage, another Immutavault REST vault, or a mounted filesystem.
@@ -122,4 +122,11 @@ immutavault --config /etc/immutavault/immutavault.yml replica-lock-init --name c
 immutavault --config /etc/immutavault/immutavault.yml replica-lock-status --name cloudflare-r2
 ```
 
-The lock initializer reads all existing R2 lock rules, preserves unrelated rules, and creates separate rules for restic's persistent `data/`, `index/`, `snapshots/`, `keys/`, and `config` namespaces. It deliberately excludes transient `locks/`, which restic must be able to create and delete. It will not intentionally replace a stronger/longer Immutavault rule with a shorter rolling-age rule. After configuration, remove the bucket-configuration token from the normal backup-service environment where practical.
+The lock initializer reads all existing R2 lock rules, preserves unrelated rules, and creates separate rules for restic's persistent `data/`, `index/`, `snapshots/`, `keys/`, and `config` namespaces. It deliberately excludes transient `locks/`, which restic must be able to create and delete. For deduplicated restic repositories, Immutavault uses **Date** rules rather than simple object-age rules. A new snapshot can reference an old data pack; therefore the retention horizon is refreshed after every successful R2 copy so that old shared packs remain protected for the newest recovery point's full immutability window. Indefinite or later Date rules are preserved and never shortened.
+
+Because Cloudflare Bucket Locks are an administratively mutable bucket policy, they are **not equivalent to S3 Compliance Object Lock**. Keep a dedicated, least-privilege Cloudflare bucket-configuration API token in the protected controller environment if automated R2 immutability is enabled; Immutavault fails the replica operation if it cannot refresh the rolling horizon. For strict WORM semantics where even administrators cannot shorten retention, prefer a provider/bucket using S3 Object Lock **COMPLIANCE** mode.
+
+
+## Large-repository Object Lock scaling note
+
+For genuine S3 Object Lock targets, Immutavault deliberately extends retention on persistent restic objects because deduplicated packs may be shared by newer snapshots. This conservative policy is correctness-first but can require many provider API calls on very large repositories (for example tens of TB with many pack objects). Measure lock-application duration and API cost during the production pilot. A future index-aware delta locker can reduce this to newly referenced objects without weakening the recovery-point retention guarantee.

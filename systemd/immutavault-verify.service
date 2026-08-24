@@ -2,6 +2,7 @@
 Description=Immutavault repository verification
 
 [Service]
+UMask=0077
 Type=oneshot
 User=root
 EnvironmentFile=/etc/immutavault/immutavault.env

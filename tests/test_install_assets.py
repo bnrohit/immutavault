@@ -13,7 +13,8 @@ def test_repository_installer_is_idempotent_for_required_secrets():
 def test_custom_repository_root_is_used_by_service_and_installer():
     service = (ROOT / "systemd/immutavault-rest-server.service").read_text(encoding="utf-8")
     installer = (ROOT / "scripts/install_repository.sh").read_text(encoding="utf-8")
-    assert "Environment=IMMUTAVAULT_REPO_ROOT=/srv/immutavault" in service
+    assert "EnvironmentFile=/etc/immutavault/repository.env" in service
+    assert "EnvironmentFile=-/etc/immutavault/immutavault.env" not in service
     assert "${IMMUTAVAULT_REPO_ROOT}/repository" in service
     assert "${IMMUTAVAULT_REPO_ROOT}/.htpasswd" in service
     assert "repo['local_path'] = f'{root}/repository'" in installer
@@ -79,7 +80,7 @@ def test_live_data_plane_acceptance_tests_append_only_and_restore_digest():
 def test_appliance_text_matches_verified_rest_server_install_path():
     text = (ROOT / "scripts/install_appliance.sh").read_text(encoding="utf-8")
     assert "does NOT download rest-server binaries" not in text
-    assert "pinned upstream rest-server binary only after SHA-256 verification" in text
+    assert "pinned upstream restic and rest-server binaries only after SHA-256 verification" in text
     assert "check_rest_server.sh" in text
 
 
@@ -126,3 +127,35 @@ def test_first_install_virtualenv_is_not_relocated_after_creation():
     assert 'python3 -m venv --system-site-packages "$TARGET"' in text
     assert 'mv "$TMP" "$TARGET"' not in text
     assert 'ln -sfn "$TARGET" "${CURRENT}.new"' in text
+
+
+
+def test_verified_restic_installer_is_pinned_checksummed_and_capability_gated():
+    install = (ROOT / "scripts/install_restic.sh").read_text(encoding="utf-8")
+    check = (ROOT / "scripts/check_restic.sh").read_text(encoding="utf-8")
+    top = (ROOT / "scripts/install.sh").read_text(encoding="utf-8")
+    assert 'VERSION="0.19.1"' in install
+    assert "f415415624dcc452f2a02b8c33641791a8c6d6d3b65bbb3543fcf9a25151585c" in install
+    assert "a5f64aaab53d51e311fa3829124c5b703f2d14cf187d8640b6be3b2b49376465" in install
+    assert "sha256sum --check --status" in install
+    assert 'MIN_VERSION="${IMMUTAVAULT_MIN_RESTIC_VERSION:-0.19.1}"' in check
+    for command in ("backup", "copy", "forget", "prune", "restore", "check"):
+        assert f"{command} --help" in check
+    assert "./scripts/install_restic.sh" in top
+    assert "--no-restic-download" in top
+
+
+def test_rest_server_service_does_not_receive_controller_secrets():
+    service = (ROOT / "systemd/immutavault-rest-server.service").read_text(encoding="utf-8")
+    installer = (ROOT / "scripts/install_repository.sh").read_text(encoding="utf-8")
+    assert "EnvironmentFile=/etc/immutavault/repository.env" in service
+    assert "immutavault.env" not in service
+    assert "printf 'IMMUTAVAULT_REPO_ROOT=%s\\n'" in installer
+    assert 'chmod 600 "$CONFIG_DIR/repository.env"' in installer
+
+
+def test_all_services_use_private_default_umask():
+    services = list((ROOT / "systemd").glob("*.service"))
+    assert services
+    for path in services:
+        assert "UMask=0077" in path.read_text(encoding="utf-8"), path.name

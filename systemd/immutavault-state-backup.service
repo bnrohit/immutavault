@@ -3,6 +3,7 @@ Description=Immutavault online catalog backup
 After=local-fs.target
 
 [Service]
+UMask=0077
 Type=oneshot
 User=immutavault
 Group=immutavault

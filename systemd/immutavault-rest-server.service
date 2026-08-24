@@ -5,9 +5,9 @@ Wants=network-online.target
 StartLimitIntervalSec=0
 
 [Service]
+UMask=0077
 Type=simple
-Environment=IMMUTAVAULT_REPO_ROOT=/srv/immutavault
-EnvironmentFile=-/etc/immutavault/immutavault.env
+EnvironmentFile=/etc/immutavault/repository.env
 User=immutavault-store
 Group=immutavault-store
 ExecStart=/usr/bin/env rest-server --path ${IMMUTAVAULT_REPO_ROOT}/repository --append-only --htpasswd-file ${IMMUTAVAULT_REPO_ROOT}/.htpasswd --listen :8000 --tls --tls-cert /etc/immutavault/tls/server.crt --tls-key /etc/immutavault/tls/server.key --tls-min-ver 1.3

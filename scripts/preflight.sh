@@ -22,7 +22,16 @@ PY
   [[ $? -eq 0 ]] && pass "Python $PY" || fail "Python 3.10+ required; found $PY"
 else fail "python3 missing"; fi
 
-for c in restic ssh openssl curl; do command -v "$c" >/dev/null && pass "$c available" || fail "$c missing"; done
+for c in ssh openssl curl; do command -v "$c" >/dev/null && pass "$c available" || fail "$c missing"; done
+if command -v restic >/dev/null; then
+  if "$(dirname "$0")/check_restic.sh" "$(command -v restic)" >/dev/null 2>&1; then
+    pass "restic available and compatible"
+  else
+    fail "restic is installed but incompatible; require v0.19.1+ with backup/copy/forget/prune/restore/check support"
+  fi
+else
+  fail "restic missing (the installer can install the pinned/SHA-verified release)"
+fi
 if command -v rest-server >/dev/null; then
   if "$(dirname "$0")/check_rest_server.sh" "$(command -v rest-server)" >/dev/null 2>&1; then
     pass "rest-server available and compatible"

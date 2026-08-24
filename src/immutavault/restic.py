@@ -7,7 +7,7 @@ from urllib.parse import quote, urlsplit, urlunsplit
 from pathlib import Path
 from .config import RepositoryConfig, ReplicaConfig
 from .runner import run
-from .storage import apply_object_lock, init_target, restic_options, restic_target_url, s3_preflight, target_env, target_health
+from .storage import apply_object_lock, ensure_r2_bucket_lock, init_target, restic_options, restic_target_url, s3_preflight, target_env, target_health
 
 
 @dataclass(frozen=True)
@@ -168,13 +168,13 @@ class ResticRepository:
         snapshots = json.loads(probe.stdout or "[]")
         if not snapshots:
             raise RuntimeError(f"replica {replica.name} did not expose copied snapshot {snapshot_id}")
-        lock_result = apply_object_lock(replica, minimum_days=immutable_days)
         if replica.provider == "cloudflare_r2" and replica.r2_bucket_lock_enabled:
-            lock_result = {
-                "enabled": True, "kind": "cloudflare_r2_bucket_lock",
-                "rule_id_base": replica.r2_lock_rule_id, "days": max(replica.r2_bucket_lock_days, immutable_days or 0),
-                "note": "provider-native R2 Bucket Locks protect persistent restic namespaces and exclude transient locks/; configure/verify with replica-lock-init",
-            }
+            # A new restic snapshot can reference old deduplicated data packs. Refresh the
+            # provider Date horizon after every successful copy so those shared objects remain
+            # protected for the full immutability window of the newest recovery point.
+            lock_result = ensure_r2_bucket_lock(replica, minimum_days=immutable_days)
+        else:
+            lock_result = apply_object_lock(replica, minimum_days=immutable_days)
         return {
             "status": "success",
             "repository": restic_target_url(replica),

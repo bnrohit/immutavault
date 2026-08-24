@@ -7,7 +7,7 @@ The main ransomware scenario is compromise of a VM, hypervisor administrator, ba
 ## OS identity separation
 
 - `immutavault`: backup controller, recovery portal, staging access.
-- `immutavault-store`: append-only repository daemon and repository filesystem access.
+- `immutavault-store`: append-only repository daemon and repository filesystem access. Its systemd unit receives only `/etc/immutavault/repository.env` (repository root), **not** the controller environment containing restic encryption, portal, cloud, or hypervisor credentials.
 - `root`: retention/prune authority; not exposed as a network backup credential.
 
 The repository daemon and portal use separate TLS private keys.
@@ -23,7 +23,7 @@ Portal roles are:
 
 When `require_four_eyes_restore` is true, a requester cannot approve their own restore request.
 
-Portal tokens can be restricted by source-platform glob and VM-name glob. Tokens are supplied by environment variables instead of being written into YAML.
+Portal tokens can be restricted by source-platform glob and VM-name glob. Tokens are supplied by environment variables instead of being written into YAML. The portal refuses a non-loopback plaintext listener; remote exposure requires TLS. Generic internal exceptions are logged server-side instead of being returned verbatim to clients.
 
 ## Non-destructive recovery default
 

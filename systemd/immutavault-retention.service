@@ -3,6 +3,7 @@ Description=Immutavault root-only retention/prune
 After=immutavault-rest-server.service
 
 [Service]
+UMask=0077
 Type=oneshot
 User=root
 EnvironmentFile=/etc/immutavault/immutavault.env

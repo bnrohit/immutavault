@@ -267,8 +267,9 @@ def _r2_api(cfg: ReplicaConfig, method: str, payload: dict[str, Any] | None = No
     token = os.getenv(cfg.r2_api_token_env)
     if not account_id or not token:
         raise RuntimeError(
-            f"Cloudflare R2 lock administration requires {cfg.r2_account_id_env} and {cfg.r2_api_token_env}; "
-            "use a dedicated admin token and remove it from the backup-service environment after configuration"
+            f"Cloudflare R2 rolling retention requires {cfg.r2_account_id_env} and {cfg.r2_api_token_env}; "
+            "store a dedicated bucket-configuration token in the protected controller environment because "
+            "the Date horizon must be refreshed after successful replica copies"
         )
     if not cfg.bucket:
         raise ValueError("R2 bucket is missing")
@@ -297,84 +298,116 @@ def _r2_api(cfg: ReplicaConfig, method: str, payload: dict[str, Any] | None = No
     return result if isinstance(result, dict) else {"result": result}
 
 
-def _r2_persistent_lock_specs(cfg: ReplicaConfig, days: int) -> list[dict[str, Any]]:
-    """Return Cloudflare Bucket Lock rules for persistent restic namespaces only.
+def _r2_date(condition: dict[str, Any]) -> datetime | None:
+    value = str(condition.get("date", "")).strip()
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
-    The transient `locks/` namespace is intentionally excluded so restic can remove its
-    own operational lock files after each command.
+
+def _r2_persistent_lock_specs(cfg: ReplicaConfig, retain_until: datetime) -> list[dict[str, Any]]:
+    """Return rolling Cloudflare Bucket Lock rules for persistent restic namespaces.
+
+    A Date horizon is intentional. Restic deduplicates data packs across snapshots, so a
+    newly-created snapshot may reference an object that is much older than that snapshot.
+    An Age rule based only on object creation time can therefore expire while a new recovery
+    point still depends on the object. Refreshing a Date horizon after every successful copy
+    keeps all persistent objects protected through the newest recovery point's immutability
+    window. The transient `locks/` namespace remains excluded so restic can release locks.
     """
     root = cfg.prefix.strip("/")
     root = f"{root}/" if root else ""
-    seconds = days * 86400
     namespaces = ("data/", "index/", "snapshots/", "keys/", "config")
     suffixes = ("data", "index", "snapshots", "keys", "config")
+    date = retain_until.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
     return [
         {
             "id": f"{cfg.r2_lock_rule_id}-{suffix}",
             "enabled": True,
             "prefix": f"{root}{namespace}",
-            "condition": {"type": "Age", "maxAgeSeconds": seconds},
+            "condition": {"type": "Date", "date": date},
         }
         for namespace, suffix in zip(namespaces, suffixes)
     ]
 
 
+def _r2_rule_covers_until(rule: dict[str, Any], desired_until: datetime) -> bool:
+    if not rule.get("enabled", True):
+        return False
+    condition = rule.get("condition") or {}
+    ctype = condition.get("type")
+    if ctype == "Indefinite":
+        return True
+    if ctype != "Date":
+        # Age rules are not sufficient for a deduplicated rolling repository: old packs can
+        # age out while a new snapshot still references them.
+        return False
+    existing = _r2_date(condition)
+    return bool(existing and existing >= desired_until)
+
+
 def r2_bucket_lock_status(cfg: ReplicaConfig) -> dict[str, Any]:
     """Read Cloudflare-native Bucket Lock rules for an R2 target.
 
-    R2 Bucket Locks are provider-native retention controls, not S3 Object Lock.
-    All five persistent restic namespaces must have an enabled Immutavault rule.
+    R2 Bucket Locks are provider-native retention controls, not S3 Object Lock. For a daily
+    protection schedule, permit up to one day of elapsed horizon between refreshes while
+    still requiring every persistent namespace to be protected into the future.
     """
     if cfg.provider != "cloudflare_r2":
         raise ValueError("R2 bucket-lock status requires provider=cloudflare_r2")
     result = _r2_api(cfg, "GET")
     rules = result.get("rules", []) or []
-    expected = _r2_persistent_lock_specs(cfg, cfg.r2_bucket_lock_days)
+    now = datetime.now(timezone.utc)
+    desired_until = now + timedelta(days=max(0, cfg.r2_bucket_lock_days - 1))
+    expected = _r2_persistent_lock_specs(cfg, desired_until)
     by_id = {str(r.get("id")): r for r in rules}
     matched = [by_id.get(rule["id"]) for rule in expected]
     enabled = all(
         actual
         and str(actual.get("prefix", "")) == wanted["prefix"]
-        and _r2_rule_is_at_least(actual, int(wanted["condition"]["maxAgeSeconds"]))
+        and _r2_rule_covers_until(actual, desired_until)
         for wanted, actual in zip(expected, matched)
     )
+    expiry_dates = [
+        _r2_date((rule or {}).get("condition") or {})
+        for rule in matched
+        if rule and (rule.get("condition") or {}).get("type") == "Date"
+    ]
+    finite_dates = [d for d in expiry_dates if d]
     return {
         "enabled": bool(enabled),
         "kind": "cloudflare_r2_bucket_lock",
+        "strength": "provider_bucket_policy_admin_mutable",
         "rule_id_base": cfg.r2_lock_rule_id,
         "protected_prefixes": [rule["prefix"] for rule in expected],
         "transient_prefix_excluded": f"{cfg.prefix.strip('/') + '/' if cfg.prefix.strip('/') else ''}locks/",
+        "minimum_retain_until": min(finite_dates).isoformat() if finite_dates else None,
         "matched_rules": [rule for rule in matched if rule],
         "rules": rules,
     }
-
-
-def _r2_rule_is_at_least(rule: dict[str, Any], desired_seconds: int) -> bool:
-    if not rule.get("enabled", True):
-        return False
-    condition = rule.get("condition") or {}
-    ctype = condition.get("type")
-    if ctype in {"Indefinite", "Date"}:
-        # Preserve indefinite/date rules. A date rule may be stronger, and replacing it
-        # automatically with rolling Age would be an unsafe policy reduction.
-        return True
-    return ctype == "Age" and int(condition.get("maxAgeSeconds", 0) or 0) >= desired_seconds
 
 
 def ensure_r2_bucket_lock(cfg: ReplicaConfig, *, minimum_days: int | None = None) -> dict[str, Any]:
     """Create or strengthen Immutavault Cloudflare R2 Bucket Lock rules.
 
     Persistent restic namespaces are locked separately while `locks/` remains excluded.
-    Unrelated rules are preserved, and existing stronger Immutavault rules are not shortened.
-    This should be run using a dedicated Cloudflare bucket-configuration admin token.
+    Unrelated rules are preserved. Existing indefinite or later Date rules are never shortened;
+    legacy Age rules are upgraded to a rolling Date horizon for deduplicated-repository safety.
+    This requires a protected Cloudflare bucket-configuration admin token.
     """
     if cfg.provider != "cloudflare_r2" or not cfg.r2_bucket_lock_enabled:
         raise ValueError("Cloudflare R2 Bucket Lock is not enabled for this target")
     result = _r2_api(cfg, "GET")
     rules = list(result.get("rules", []) or [])
     days = max(cfg.r2_bucket_lock_days, minimum_days or 0)
-    desired = _r2_persistent_lock_specs(cfg, days)
-    desired_ids = {r["id"] for r in desired}
+    retain_until = datetime.now(timezone.utc) + timedelta(days=days)
+    desired = _r2_persistent_lock_specs(cfg, retain_until)
     root = cfg.prefix.strip("/")
     root_prefix = f"{root}/" if root else ""
 
@@ -395,8 +428,7 @@ def ensure_r2_bucket_lock(cfg: ReplicaConfig, *, minimum_days: int | None = None
             changed = True
             continue
         idx, existing = found
-        desired_seconds = int(wanted["condition"]["maxAgeSeconds"])
-        if _r2_rule_is_at_least(existing, desired_seconds) and str(existing.get("prefix", "")) == wanted["prefix"]:
+        if _r2_rule_covers_until(existing, retain_until) and str(existing.get("prefix", "")) == wanted["prefix"]:
             effective.append(existing)
             continue
         rules[idx] = wanted
@@ -408,8 +440,10 @@ def ensure_r2_bucket_lock(cfg: ReplicaConfig, *, minimum_days: int | None = None
     return {
         "enabled": True,
         "kind": "cloudflare_r2_bucket_lock",
+        "strength": "provider_bucket_policy_admin_mutable",
         "rule_id_base": cfg.r2_lock_rule_id,
         "days": days,
+        "retain_until": retain_until.isoformat(),
         "changed": changed,
         "protected_prefixes": [r["prefix"] for r in desired],
         "transient_prefix_excluded": f"{root_prefix}locks/",

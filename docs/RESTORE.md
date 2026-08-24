@@ -16,7 +16,7 @@ Immutavault restores by recovery-point ID. A recovery point is immutable metadat
 
 ## VMware
 
-The v0.5 VMware path stores OVF/VMDK produced from the snapshot-assisted powered-off temporary clone workflow using `govc`. Restore locates the OVF descriptor and uses `govc import.ovf -name <new-name>`. Configure GOVC datacenter/datastore/network/resource-pool environment as appropriate for the destination.
+The v0.5.1 VMware path stores OVF/VMDK produced from the snapshot-assisted powered-off temporary clone workflow using `govc`. Restore locates the OVF descriptor and uses `govc import.ovf -name <new-name>`. Configure GOVC datacenter/datastore/network/resource-pool environment as appropriate for the destination. For a DR vCenter whose port group differs from the source, pass restore option `network`; for multi-network OVFs pass a generated `options_json` import spec.
 
 ## Proxmox
 
@@ -30,7 +30,7 @@ Example restore options:
 
 ## XCP-ng
 
-Recovery copies the XVA to the selected XCP-ng pool master and calls `xe vm-import`. `sr_uuid` can be supplied in the request or configured as the platform default. Existing same-name VMs are not overwritten automatically.
+Snapshot-mode XVA backups are intentionally exported as XCP-ng templates. Recovery copies the XVA to the selected pool master, calls `xe vm-import`, detects whether the imported object is a template, creates the bootable recovery VM with `xe vm-install`, and removes the temporary imported template. Historical XVA files that import directly as VMs are still supported. `sr_uuid` can be supplied in the request or configured as the platform default. Existing same-name VMs are not overwritten automatically.
 
 Example:
 

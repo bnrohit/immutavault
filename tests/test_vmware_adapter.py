@@ -14,6 +14,10 @@ def test_vmware_uses_per_platform_credentials(monkeypatch):
     captured = []
     def fake_run(command, **kwargs):
         captured.append(kwargs.get("env", {}))
+        if len(command) >= 3 and command[1] == "import.ovf" and command[2] == "-h":
+            return CommandResult(command, 0, "Usage: govc import.ovf -net string -options string", "")
+        if command[-1:] == ["-h"]:
+            return CommandResult(command, 0, "Usage", "")
         return CommandResult(command, 0, '{"about": {}}', "")
     monkeypatch.setattr("immutavault.adapters.vmware.run", fake_run)
     adapter = VMwareAdapter(cfg, 30)
@@ -125,3 +129,36 @@ def test_vmware_success_is_not_reported_if_snapshot_cleanup_fails(monkeypatch, t
     import pytest
     with pytest.raises(RuntimeError, match="cleanup requires operator attention"):
         VMwareAdapter(cfg, 30).export(VM(id="vm", name="vm", kind="vmware"), tmp_path)
+
+
+def test_vmware_restore_can_remap_network_on_different_vcenter(monkeypatch, tmp_path):
+    cfg = PlatformConfig(
+        name="vc-dr", type="vmware", endpoint="https://vc-dr/sdk", mode="hot-clone-export",
+        options={"username_env": "U", "password_env": "P"},
+    )
+    monkeypatch.setenv("U", "u")
+    monkeypatch.setenv("P", "p")
+    (tmp_path / "vm.ovf").write_text("<Envelope/>", encoding="utf-8")
+    result = VMwareAdapter(cfg, 30).restore(
+        tmp_path,
+        target_name="restored",
+        options={"network": "DR-Servers"},
+        dry_run=True,
+    )
+    assert result["command"][:4] == ["govc", "import.ovf", "-name", "restored"]
+    assert "-net" in result["command"]
+    assert "DR-Servers" in result["command"]
+
+
+
+def test_vmware_doctor_rejects_govc_without_network_mapping(monkeypatch):
+    cfg = PlatformConfig(name="vc", type="vmware", endpoint="https://vc/sdk", options={"username_env": "U", "password_env": "P"})
+    monkeypatch.setenv("U", "u"); monkeypatch.setenv("P", "p")
+    monkeypatch.setattr("immutavault.adapters.vmware.shutil.which", lambda name: "/usr/bin/govc")
+    def fake_run(command, **kwargs):
+        if command[-1:] == ["-h"]:
+            return CommandResult(command, 0, "Usage without network mapping", "")
+        return CommandResult(command, 0, "{}", "")
+    monkeypatch.setattr("immutavault.adapters.vmware.run", fake_run)
+    problems = VMwareAdapter(cfg, 30).doctor()
+    assert any("lacks -net mapping" in p for p in problems)

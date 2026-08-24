@@ -6,6 +6,7 @@ REPO_ROOT="/srv/immutavault"
 ENABLE=0
 SKIP_PACKAGES=0
 INSTALL_REST_SERVER=1
+INSTALL_RESTIC=1
 
 usage() {
   cat <<'USAGE'
@@ -19,6 +20,7 @@ Options:
   --repo-root PATH                   Repository/staging root (default: /srv/immutavault)
   --enable-services                  Install and enable systemd units after validation
   --skip-packages                    Do not install OS packages (for prebuilt/minimal images)
+  --no-restic-download                Do not download the pinned/SHA-verified upstream restic binary
   --no-rest-server-download           Do not download the pinned/SHA-verified upstream rest-server binary
   -h, --help                         Show this help
 
@@ -35,6 +37,7 @@ while [[ $# -gt 0 ]]; do
     --repo-root) REPO_ROOT="${2:?missing path}"; shift 2 ;;
     --enable-services) ENABLE=1; shift ;;
     --skip-packages) SKIP_PACKAGES=1; shift ;;
+    --no-restic-download) INSTALL_RESTIC=0; shift ;;
     --no-rest-server-download) INSTALL_REST_SERVER=0; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
@@ -51,6 +54,29 @@ if [[ $SKIP_PACKAGES -eq 0 ]]; then
   ./scripts/install_appliance.sh "$REPO_ROOT"
 else
   ./scripts/install_controller.sh "$REPO_ROOT"
+fi
+
+# All roles execute restic for backup/restore/replication diagnostics. Require a
+# known-current upstream feature baseline instead of silently accepting an old distro build.
+RESTIC_OK=0
+if command -v restic >/dev/null 2>&1; then
+  if ./scripts/check_restic.sh "$(command -v restic)" >/dev/null 2>&1; then
+    RESTIC_OK=1
+  else
+    echo "Existing restic is older/incompatible with this Immutavault release." >&2
+  fi
+fi
+if [[ $RESTIC_OK -eq 0 && $INSTALL_RESTIC -eq 1 ]]; then
+  ./scripts/install_restic.sh
+  RESTIC_OK=1
+fi
+if [[ $RESTIC_OK -eq 0 ]]; then
+  cat >&2 <<WARN
+A compatible restic >= 0.19.1 is required for role '$ROLE'.
+Install the official compatible binary or rerun without --no-restic-download so Immutavault can install the pinned/SHA-verified upstream release.
+No services were enabled.
+WARN
+  exit 3
 fi
 
 if [[ "$ROLE" == repository || "$ROLE" == all ]]; then
