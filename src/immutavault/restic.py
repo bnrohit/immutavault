@@ -8,6 +8,16 @@ from pathlib import Path
 from .config import RepositoryConfig, ReplicaConfig
 from .runner import run
 from .storage import apply_object_lock, ensure_r2_bucket_lock, init_target, restic_options, restic_target_url, s3_preflight, target_env, target_health
+from .transport_state import (
+    CHAIN_INDEX,
+    atomic_json,
+    chain_for,
+    commit_after_backup,
+    dependency_row,
+    expand_dependencies,
+    marker_for_source,
+    prune_dependencies,
+)
 
 
 @dataclass(frozen=True)
@@ -39,12 +49,6 @@ class ResticRepository:
         return env
 
     def _source_repository_with_auth(self) -> str:
-        """Return primary REST URL with transport credentials embedded in the environment-only source URL.
-
-        restic does not provide FROM-prefixed REST backend credential variables. Embedding credentials
-        in RESTIC_FROM_REPOSITORY keeps them out of command-line process arguments while allowing a
-        copy to use different destination backend credentials.
-        """
         url = self.cfg.url
         user = os.getenv("REST_SERVER_USER")
         password = os.getenv("REST_SERVER_PASSWORD")
@@ -85,53 +89,88 @@ class ResticRepository:
                 values["data_added"] = int(event.get("data_added", 0) or 0)
         if not values["snapshot_id"]:
             raise RuntimeError("restic backup completed without returning a snapshot id")
+        # Transaction boundary: CBT change IDs are advanced only after restic has
+        # durably returned the immutable recovery-point ID. A failed restic run
+        # therefore cannot create a skipped-change gap in the next incremental.
+        commit_after_backup(path, str(values["snapshot_id"]))
         return BackupSummary(**values)  # type: ignore[arg-type]
 
     def snapshots(self) -> list[dict]:
         result = run(["restic", "snapshots", "--json"], timeout=300, env=self._env(local=False))
         return json.loads(result.stdout or "[]")
 
-    def restore(self, snapshot_id: str, target: str, replica: ReplicaConfig | None = None) -> None:
+    def _restore_one(self, snapshot_id: str, target: str, replica: ReplicaConfig | None) -> None:
         Path(target).mkdir(parents=True, exist_ok=True)
         if replica is None:
             run(["restic", "restore", snapshot_id, "--target", target], timeout=self.timeout, env=self._env(local=False))
             return
-        env = target_env(replica)
         run(
             ["restic", *restic_options(replica), "restore", snapshot_id, "--target", target],
-            timeout=self.timeout, env=env,
+            timeout=self.timeout, env=target_env(replica),
         )
 
-    def retention(self, *, protected_snapshot_ids: set[str] | None = None) -> list[str]:
-        """Apply GFS policy without deleting state-protected snapshots.
+    def restore(self, snapshot_id: str, target: str, replica: ReplicaConfig | None = None) -> None:
+        self._restore_one(snapshot_id, target, replica)
+        chain = chain_for(snapshot_id)
+        if len(chain) <= 1:
+            return
+        root = Path(target)
+        layers: list[dict] = []
+        chain_root = root / ".immutavault-chain"
+        chain_root.mkdir(parents=True, exist_ok=True)
+        for index, sid in enumerate(chain):
+            row = dependency_row(sid)
+            if not row:
+                raise RuntimeError(f"missing CBT dependency metadata for {sid}")
+            if sid == snapshot_id:
+                layer_root = root
+            else:
+                layer_root = chain_root / f"{index:03d}-{sid[:16]}"
+                self._restore_one(sid, str(layer_root), replica)
+            source_path = str(row.get("source_path") or "")
+            if not source_path:
+                raise RuntimeError(f"CBT dependency {sid} has no source path")
+            source = layer_root / source_path.lstrip("/")
+            if not source.exists():
+                raise RuntimeError(f"restored CBT layer {sid} is missing expected source path {source}")
+            marker = marker_for_source(source)
+            kind = str((marker or {}).get("kind") or row.get("kind") or "")
+            layers.append({"snapshot_id": sid, "kind": kind, "source": str(source)})
+        if not layers or layers[0].get("kind") != "baseline":
+            raise RuntimeError("CBT restore chain does not start with a full baseline")
+        atomic_json(root / CHAIN_INDEX, {"schema": 1, "transport": "vmware-cbt-vddk", "layers": layers})
 
-        We first ask restic for a JSON dry-run, then remove only snapshots not
-        protected by Immutavault's immutable_until catalog. This is intentionally
-        executed against the local repository by the root-only maintenance job.
-        """
+    def retention(self, *, protected_snapshot_ids: set[str] | None = None) -> list[str]:
+        """Apply GFS policy while preserving every retained CBT ancestor."""
         r = self.cfg.retention
-        protected = protected_snapshot_ids or set()
+        protected = set(protected_snapshot_ids or set())
         policy = [
             "--group-by", "tags", "--keep-within", f"{r.keep_within_days}d",
             "--keep-daily", str(r.keep_daily), "--keep-weekly", str(r.keep_weekly),
             "--keep-monthly", str(r.keep_monthly), "--keep-yearly", str(r.keep_yearly),
             "--keep-last", str(r.min_restore_points),
         ]
-        preview = run(
-            ["restic", "forget", "--dry-run", "--json", *policy],
-            timeout=self.timeout, env=self._env(local=True),
-        )
+        local_env = self._env(local=True)
+        all_result = run(["restic", "snapshots", "--json"], timeout=300, env=local_env)
+        existing = {str(row.get("id") or "") for row in json.loads(all_result.stdout or "[]") if row.get("id")}
+        preview = run(["restic", "forget", "--dry-run", "--json", *policy], timeout=self.timeout, env=local_env)
         groups = json.loads(preview.stdout or "[]")
-        remove: list[str] = []
+        candidates: set[str] = set()
         for group in groups:
             for snap in group.get("remove", []):
                 sid = str(snap.get("id", ""))
-                if sid and sid not in protected:
-                    remove.append(sid)
-        remove = sorted(set(remove))
+                if sid:
+                    candidates.add(sid)
+        # Determine the snapshots policy intends to keep, then recursively protect
+        # their CBT baselines/parents. This prevents a valid incremental from
+        # outliving the full/delta layers required to restore it.
+        kept = (existing - candidates) | protected
+        protected |= expand_dependencies(kept)
+        remove = sorted(sid for sid in candidates if sid not in protected)
         if remove:
-            run(["restic", "forget", *remove], timeout=self.timeout, env=self._env(local=True))
-            run(["restic", "prune"], timeout=self.timeout, env=self._env(local=True))
+            run(["restic", "forget", *remove], timeout=self.timeout, env=local_env)
+            run(["restic", "prune"], timeout=self.timeout, env=local_env)
+        prune_dependencies(existing - set(remove))
         return remove
 
     def check(self) -> None:
@@ -160,7 +199,6 @@ class ResticRepository:
         env["RESTIC_FROM_REPOSITORY"] = self._source_repository_with_auth()
         env["RESTIC_FROM_PASSWORD"] = primary_password
         run(["restic", *restic_options(replica), "copy", snapshot_id], timeout=self.timeout, env=env)
-        # Confirm the snapshot is actually visible in the destination before considering the copy healthy.
         probe = run(
             ["restic", *restic_options(replica), "snapshots", snapshot_id, "--json"],
             timeout=300, env=env,
@@ -169,9 +207,6 @@ class ResticRepository:
         if not snapshots:
             raise RuntimeError(f"replica {replica.name} did not expose copied snapshot {snapshot_id}")
         if replica.provider == "cloudflare_r2" and replica.r2_bucket_lock_enabled:
-            # A new restic snapshot can reference old deduplicated data packs. Refresh the
-            # provider Date horizon after every successful copy so those shared objects remain
-            # protected for the full immutability window of the newest recovery point.
             lock_result = ensure_r2_bucket_lock(replica, minimum_days=immutable_days)
         else:
             lock_result = apply_object_lock(replica, minimum_days=immutable_days)
