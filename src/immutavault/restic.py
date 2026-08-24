@@ -89,9 +89,6 @@ class ResticRepository:
                 values["data_added"] = int(event.get("data_added", 0) or 0)
         if not values["snapshot_id"]:
             raise RuntimeError("restic backup completed without returning a snapshot id")
-        # Transaction boundary: CBT change IDs are advanced only after restic has
-        # durably returned the immutable recovery-point ID. A failed restic run
-        # therefore cannot create a skipped-change gap in the next incremental.
         commit_after_backup(path, str(values["snapshot_id"]))
         return BackupSummary(**values)  # type: ignore[arg-type]
 
@@ -104,19 +101,14 @@ class ResticRepository:
         if replica is None:
             run(["restic", "restore", snapshot_id, "--target", target], timeout=self.timeout, env=self._env(local=False))
             return
-        run(
-            ["restic", *restic_options(replica), "restore", snapshot_id, "--target", target],
-            timeout=self.timeout, env=target_env(replica),
-        )
+        run(["restic", *restic_options(replica), "restore", snapshot_id, "--target", target], timeout=self.timeout, env=target_env(replica))
 
     def restore(self, snapshot_id: str, target: str, replica: ReplicaConfig | None = None) -> None:
         self._restore_one(snapshot_id, target, replica)
         chain = chain_for(snapshot_id)
         if len(chain) <= 1:
             return
-        root = Path(target)
-        layers: list[dict] = []
-        chain_root = root / ".immutavault-chain"
+        root = Path(target); layers: list[dict] = []; chain_root = root / ".immutavault-chain"
         chain_root.mkdir(parents=True, exist_ok=True)
         for index, sid in enumerate(chain):
             row = dependency_row(sid)
@@ -142,8 +134,7 @@ class ResticRepository:
 
     def retention(self, *, protected_snapshot_ids: set[str] | None = None) -> list[str]:
         """Apply GFS policy while preserving every retained CBT ancestor."""
-        r = self.cfg.retention
-        protected = set(protected_snapshot_ids or set())
+        r = self.cfg.retention; protected = set(protected_snapshot_ids or set())
         policy = [
             "--group-by", "tags", "--keep-within", f"{r.keep_within_days}d",
             "--keep-daily", str(r.keep_daily), "--keep-weekly", str(r.keep_weekly),
@@ -154,16 +145,11 @@ class ResticRepository:
         all_result = run(["restic", "snapshots", "--json"], timeout=300, env=local_env)
         existing = {str(row.get("id") or "") for row in json.loads(all_result.stdout or "[]") if row.get("id")}
         preview = run(["restic", "forget", "--dry-run", "--json", *policy], timeout=self.timeout, env=local_env)
-        groups = json.loads(preview.stdout or "[]")
-        candidates: set[str] = set()
+        groups = json.loads(preview.stdout or "[]"); candidates: set[str] = set()
         for group in groups:
             for snap in group.get("remove", []):
                 sid = str(snap.get("id", ""))
-                if sid:
-                    candidates.add(sid)
-        # Determine the snapshots policy intends to keep, then recursively protect
-        # their CBT baselines/parents. This prevents a valid incremental from
-        # outliving the full/delta layers required to restore it.
+                if sid: candidates.add(sid)
         kept = (existing - candidates) | protected
         protected |= expand_dependencies(kept)
         remove = sorted(sid for sid in candidates if sid not in protected)
@@ -174,10 +160,8 @@ class ResticRepository:
         return remove
 
     def check(self) -> None:
-        pct = self.cfg.verify_percent
-        cmd = ["restic", "check"]
-        if pct > 0:
-            cmd += ["--read-data-subset", f"{pct}%"]
+        pct = self.cfg.verify_percent; cmd = ["restic", "check"]
+        if pct > 0: cmd += ["--read-data-subset", f"{pct}%"]
         run(cmd, timeout=self.timeout, env=self._env(local=True))
 
     def init_replica(self, replica: ReplicaConfig) -> dict:
@@ -198,22 +182,20 @@ class ResticRepository:
             s3_preflight(replica)
         env["RESTIC_FROM_REPOSITORY"] = self._source_repository_with_auth()
         env["RESTIC_FROM_PASSWORD"] = primary_password
-        run(["restic", *restic_options(replica), "copy", snapshot_id], timeout=self.timeout, env=env)
-        probe = run(
-            ["restic", *restic_options(replica), "snapshots", snapshot_id, "--json"],
-            timeout=300, env=env,
-        )
-        snapshots = json.loads(probe.stdout or "[]")
-        if not snapshots:
-            raise RuntimeError(f"replica {replica.name} did not expose copied snapshot {snapshot_id}")
+        chain = chain_for(snapshot_id)
+        copied: list[str] = []
+        for sid in chain:
+            run(["restic", *restic_options(replica), "copy", sid], timeout=self.timeout, env=env)
+            probe = run(["restic", *restic_options(replica), "snapshots", sid, "--json"], timeout=300, env=env)
+            if not json.loads(probe.stdout or "[]"):
+                raise RuntimeError(f"replica {replica.name} did not expose required CBT chain snapshot {sid}")
+            copied.append(sid)
         if replica.provider == "cloudflare_r2" and replica.r2_bucket_lock_enabled:
             lock_result = ensure_r2_bucket_lock(replica, minimum_days=immutable_days)
         else:
             lock_result = apply_object_lock(replica, minimum_days=immutable_days)
         return {
-            "status": "success",
-            "repository": restic_target_url(replica),
-            "backend": replica.backend,
+            "status": "success", "repository": restic_target_url(replica), "backend": replica.backend,
             "provider": replica.provider if replica.backend == "s3" else None,
-            "object_lock": lock_result,
+            "object_lock": lock_result, "chain_snapshots": copied,
         }
