@@ -76,6 +76,15 @@ def _read_json_line(reader: BinaryIO) -> dict[str, Any]:
     return value
 
 
+def _required_actor(request: dict[str, Any]) -> str:
+    actor = str(request.get("actor") or "").strip()
+    if not actor:
+        raise PermissionError("FLR broker request requires an authenticated actor")
+    if len(actor) > 512:
+        raise ValueError("FLR actor identifier is too long")
+    return actor
+
+
 class FLRBrokerClient:
     """Portal-side FLR facade.
 
@@ -88,14 +97,20 @@ class FLRBrokerClient:
         self.cfg = cfg
         self.socket_path = socket_path or os.getenv("IMMUTAVAULT_FLR_BROKER_SOCKET", DEFAULT_SOCKET)
         self.enabled = bool(getattr(getattr(cfg, "flr", None), "enabled", True))
+        runtime_timeout = int(getattr(getattr(cfg, "runtime", None), "command_timeout_seconds", 14400))
+        # Mount/inspection and large downloads can legitimately outlive a short
+        # HTTP-style timeout. Bound the local broker operation to the same
+        # production runtime window while retaining a short socket-connect gate.
+        self.operation_timeout_seconds = max(60, min(runtime_timeout, 172800))
         self._owners: dict[str, str] = {}
         self._lock = threading.RLock()
 
     def _connect(self) -> socket.socket:
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.settimeout(30)
+        sock.settimeout(10)
         try:
             sock.connect(self.socket_path)
+            sock.settimeout(self.operation_timeout_seconds)
         except OSError as exc:
             sock.close()
             raise RuntimeError(f"FLR broker is unavailable at {self.socket_path}: {exc}") from exc
@@ -239,6 +254,7 @@ class FLRBrokerServer(_ThreadingUnixStreamServer):
         action = str(request.get("action") or "")
         if action == "status":
             return self.manager.status()
+        actor = _required_actor(request)
         if action == "open":
             point = request.get("point")
             if not isinstance(point, dict):
@@ -246,26 +262,23 @@ class FLRBrokerServer(_ThreadingUnixStreamServer):
             required = ("snapshot_id", "platform", "vm_name", "source_path")
             if any(not isinstance(point.get(key), str) or not point.get(key) for key in required):
                 raise ValueError("FLR recovery-point object is incomplete")
-            return self.manager.open_session(point, actor=str(request.get("actor") or ""))
+            return self.manager.open_session(point, actor=actor)
         if action == "list":
             return self.manager.list_directory(
                 str(request.get("session_id") or ""),
                 str(request.get("user_path") or "/"),
-                actor=str(request.get("actor") or ""),
+                actor=actor,
                 admin=False,
             )
         if action == "stat":
             file = self.manager.open_file(
                 str(request.get("session_id") or ""),
                 str(request.get("user_path") or ""),
-                actor=str(request.get("actor") or ""),
+                actor=actor,
                 admin=False,
             )
             return {"name": file.name, "size": file.size}
         if action == "close":
-            actor = str(request.get("actor") or "")
-            if not actor:
-                raise PermissionError("FLR session close requires an actor")
             session_id = str(request.get("session_id") or "")
             self.manager.close_session(session_id, actor=actor, force=False)
             return {"session_id": session_id, "status": "closed"}
@@ -291,10 +304,11 @@ class _FLRBrokerHandler(socketserver.StreamRequestHandler):
             request = _read_json_line(self.rfile)
             action = str(request.get("action") or "")
             if action == "download":
+                actor = _required_actor(request)
                 file = self.server.manager.open_file(
                     str(request.get("session_id") or ""),
                     str(request.get("user_path") or ""),
-                    actor=str(request.get("actor") or ""),
+                    actor=actor,
                     admin=False,
                 )
                 self.wfile.write(_json_line({"ok": True, "result": {"name": file.name, "size": file.size}}))
