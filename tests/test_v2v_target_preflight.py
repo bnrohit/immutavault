@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -21,17 +22,17 @@ class FakeAdapter:
         return ["ssh", "pve.example"]
 
 
-def _bundle(tmp_path):
+def _bundle(tmp_path, *, firmware="uefi"):
     inspection = V2VInspection(
         os_family="linux", distro="ubuntu", osinfo="ubuntu24.04", arch="x86_64",
-        firmware="uefi", disk_count=1, virtual_bytes=2 * 1024**3,
+        firmware=firmware, disk_count=1, virtual_bytes=2 * 1024**3,
         secure_boot=False, source_tpm=False, source_networks=("Servers",),
     )
     return ConvertedBundle(
         domain_xml=tmp_path / "guest.xml",
         disks=(ConvertedDisk(tmp_path / "disk.qcow2", "qcow2", 2 * 1024**3),),
         nics=(ConvertedNIC("52:54:00:12:34:56", "Servers"),),
-        memory_mib=4096, vcpus=4, firmware="uefi", inspection=inspection,
+        memory_mib=4096, vcpus=4, firmware=firmware, inspection=inspection,
     )
 
 
@@ -81,3 +82,24 @@ def test_missing_target_bridge_fails_before_vm_creation(monkeypatch, tmp_path):
     )
     with pytest.raises(RuntimeError, match="target bridge 'vmbr20' does not exist"):
         manager._preflight_proxmox_bridges(_bundle(tmp_path), target, {})
+
+
+def test_bios_preflight_does_not_require_unrelated_efi_storage(monkeypatch):
+    cfg = load_v10_config(EXAMPLE)
+    manager = CertifiedV2VManager(cfg)
+    target = next(p for p in cfg.platforms if p.name == "pve-campus-a")
+    target = replace(target, options={**target.options, "v2v_efi_storage": "offline-efi"})
+    monkeypatch.setattr("immutavault.v2v_cert.ProxmoxAdapter", FakeAdapter)
+
+    seen = []
+    def fake_run(command, **kwargs):
+        seen.append(command[-1])
+        if "--storage local-lvm" in command[-1]:
+            return SimpleNamespace(returncode=0, stdout="Name Type Status Total Used Available %\nlocal-lvm lvmthin active 1000 100 900 10%\n", stderr="")
+        return SimpleNamespace(returncode=0, stdout="Name Type Status Total Used Available %\n", stderr="")
+    monkeypatch.setattr("immutavault.v2v_cert.run", fake_run)
+
+    manager._preflight_proxmox_storage(target, {}, include_efi=False)
+    assert all("offline-efi" not in command for command in seen)
+    with pytest.raises(RuntimeError, match="offline-efi"):
+        manager._preflight_proxmox_storage(target, {}, include_efi=True)
