@@ -1,11 +1,15 @@
-# File-Level Recovery (FLR) — v0.8
+# File-Level Recovery (FLR) — v1.0.1
 
-Immutavault v0.8 can recover an individual file without restoring and importing the complete VM first.
+Immutavault can recover an individual file without restoring and importing the complete VM first. v1.0.1 keeps the v0.8 read-only recovery model but moves all mount privilege out of the network-facing portal.
 
-The FLR data path is deliberately read-only:
+The FLR data path is deliberately read-only and privilege-separated:
 
 ```text
-immutable restic recovery point
+HTTPS portal (User=immutavault, no /dev/fuse, no capabilities)
+        |
+        | owner-bound JSON request over /run/immutavault/flr.sock
+        v
+local FLR broker (root, private mount namespace, SO_PEERCRED)
         |
         | restic mount --no-lock
         v
@@ -15,11 +19,11 @@ short-lived FUSE view on the vault
         v
 read-only guest filesystem tree
         |
-        +--> portal browse
-        +--> streamed single-file download
+        +--> brokered directory listing
+        +--> brokered streamed single-file download
 ```
 
-The portal does **not** receive prune, forget, repository-maintenance, or snapshot-delete authority. FLR reads the same immutable recovery point used for a full restore.
+The portal does **not** receive prune, forget, repository-maintenance, snapshot-delete, FUSE-mount, or host-device authority. FLR reads the same immutable recovery point used for a full restore.
 
 ## Supported disk exposure
 
@@ -54,21 +58,31 @@ On the vault/controller that serves FLR, install:
 - qemu image tooling for guest disk format support;
 - restic 0.19.1+.
 
-The appliance installer installs these dependencies on supported package-manager paths. `/dev/fuse` must be available to the `immutavault` service identity.
+The appliance installer installs these dependencies on supported package-manager paths. `/dev/fuse` must be available to **`immutavault-flr.service`**, not to the `immutavault` portal identity. The installer removes the dedicated portal user from the `fuse` group on upgrade when possible.
 
 Check manually:
 
 ```bash
-command -v restic
-command -v guestmount
-command -v guestunmount
-command -v fusermount3
+./scripts/check_flr.sh
+systemctl status immutavault-flr.service
+systemctl status immutavault-portal.service
+ls -l /run/immutavault/flr.sock
 ls -l /dev/fuse
 ```
 
+The expected portal hardening is:
+
+```text
+NoNewPrivileges=true
+PrivateDevices=true
+CapabilityBoundingSet=
+```
+
+The FLR broker uses a private mount namespace, verifies Linux `SO_PEERCRED` on each Unix-socket connection, and owns the root-only FLR mount tree.
+
 ## Configuration
 
-FLR settings are part of the validated YAML schema:
+FLR settings remain part of the validated YAML schema:
 
 ```yaml
 flr:
@@ -81,28 +95,35 @@ flr:
   mount_wait_seconds: 30
 ```
 
+The broker socket defaults to `/run/immutavault/flr.sock`. It can be overridden for controlled packaging/testing with `IMMUTAVAULT_FLR_BROKER_SOCKET`; normal appliances should use the default systemd-managed runtime path.
+
 Limits are intentionally bounded by schema validation. The mount root must be absolute, session TTL is capped, concurrent sessions are limited per user, and individual portal downloads are size-limited.
 
 ## Portal workflow
 
 1. Open **Recovery points** for the protected VM.
 2. Choose **Files** on the desired point.
-3. Immutavault opens a short-lived FLR session owned by the authenticated portal user.
-4. Browse directories in the **File-level recovery** panel.
-5. Choose **Download** for the required regular file.
-6. Close the FLR session. Sessions also expire automatically.
+3. The portal asks the local FLR broker to open a short-lived session owned by the authenticated identity.
+4. The broker mounts the immutable point and guest filesystems read-only.
+5. Browse directories in the **File-level recovery** panel.
+6. Choose **Download** for the required regular file.
+7. Close the FLR session. Sessions also expire automatically.
 
-Only `restore_operator` and `admin` roles can open FLR sessions or download files. Admins can clean up another user's session; normal operators cannot access another operator's session.
+Only `restore_operator` and `admin` roles can open FLR sessions or download files. **Admin role does not bypass active FLR session ownership.** A global or tenant admin can create a fresh session against any recovery point already authorized to that identity, but cannot attach to another user's mounted filesystem session.
 
 ## Security controls
 
-v0.8 applies these controls before exposing guest data:
+v1.0.1 applies these controls before exposing guest data:
 
 - recovery repository mounted read-only with `restic mount --no-lock`;
 - guest disk inspection mounted with `guestmount --ro`;
-- per-user session ownership;
+- mount operations isolated from the network portal in `immutavault-flr.service`;
+- Unix-socket peer validation using Linux `SO_PEERCRED`;
+- portal runs with `NoNewPrivileges=true`, `PrivateDevices=true`, and an empty capability set;
+- FLR broker uses a private mount namespace;
+- per-user session ownership with no admin browse/download bypass;
 - random session IDs;
-- mode-0700 temporary session directories;
+- root-owned mode-0700 temporary session directories;
 - bounded session lifetime and concurrent-session limit;
 - `..` path traversal rejected;
 - guest symlinks are never followed for browse/download;
@@ -110,11 +131,11 @@ v0.8 applies these controls before exposing guest data:
 - only regular files can be streamed;
 - maximum single-file download size enforced server-side;
 - FLR open/close/download actions recorded in the tamper-evident audit log;
-- no repository delete/prune authority is added to the portal.
+- no repository delete/prune authority is added to the portal or broker.
 
 ## Application consistency
 
-v0.8 records an application-consistency attestation inside the protected recovery payload and in the recovery-point catalog.
+Immutavault records an application-consistency attestation inside the protected recovery payload and in the recovery-point catalog.
 
 For VMware `hot-clone-export`:
 
@@ -139,7 +160,7 @@ For native VDDK/CBT with `application_consistency_strict: true`, the external pr
 }
 ```
 
-If strict application consistency was requested but the provider reports success without proving an accepted consistency state, Immutavault fails the backup closed **before advancing the CBT checkpoint**. The incremental adapter then invalidates the uncertain cache, preserving the v0.7.1 fail-closed chain policy.
+If strict application consistency was requested but the provider reports success without proving an accepted consistency state, Immutavault fails the backup closed **before advancing the CBT checkpoint**. The incremental adapter then invalidates the uncertain cache, preserving the fail-closed chain policy.
 
 ## Production acceptance
 
@@ -147,13 +168,15 @@ Before enabling FLR for important workloads, test a disposable VM containing kno
 
 1. Create a backup point.
 2. Confirm its consistency state matches the intended policy.
-3. Open an FLR session.
-4. Browse to a known nested directory.
-5. Download a known file and verify its SHA-256 against the source.
-6. Confirm a symlink cannot be followed as a file-download shortcut.
-7. Confirm `../` traversal is rejected.
-8. Confirm a second portal user cannot read the first user's session.
-9. Close the session and verify the FUSE/libguestfs mounts disappear.
-10. Repeat after reboot and after upgrades to restic/libguestfs/qemu/hypervisor tooling.
+3. Verify `immutavault-portal.service` is hardened and `immutavault-flr.service` owns the broker socket.
+4. Open an FLR session.
+5. Browse to a known nested directory.
+6. Download a known file and verify its SHA-256 against the source.
+7. Confirm a symlink cannot be followed as a file-download shortcut.
+8. Confirm `../` traversal is rejected.
+9. Confirm a second portal user, including an admin, cannot read the first user's active session.
+10. Close the session and verify the broker's FUSE/libguestfs mounts disappear.
+11. Stop the FLR broker and confirm the portal reports FLR unavailable instead of attempting a direct mount.
+12. Repeat after reboot and after upgrades to restic/libguestfs/qemu/hypervisor tooling.
 
 FLR reduces recovery time for files; it does not replace full isolated restore/boot testing of complete VM recovery points.
