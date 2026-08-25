@@ -28,6 +28,7 @@ vmware_doc = Path('docs/VMWARE_BACKUP.md').read_text()
 incremental_example = Path('config/vmware-incremental.example.yml').read_text()
 flr_doc = Path('docs/FILE_LEVEL_RECOVERY.md').read_text()
 flr_code = Path('src/immutavault/flr.py').read_text()
+flr_broker = Path('src/immutavault/flr_broker.py').read_text()
 config_example = Path('config/immutavault.example.yml').read_text()
 v2v_doc = Path('docs/CERTIFIED_V2V.md').read_text()
 v2v_config = Path('config/enterprise-v1.0.example.yml').read_text()
@@ -38,7 +39,8 @@ v2v_cli = Path('src/immutavault/cli_v10.py').read_text()
 
 assert f'__version__ = "{version}"' in init
 assert re.search(r'^version = "' + re.escape(version) + r'"$', pyproject, re.M)
-assert 'immutavault = "immutavault.cli_v10:main"' in pyproject, 'v1.0 console script does not use certified V2V entry point'
+assert 'immutavault = "immutavault.cli_v10:main"' in pyproject
+assert 'immutavault-flr-broker = "immutavault.flr_broker:main"' in pyproject
 
 # Release-facing operator documentation must never lag VERSION.
 assert readme.startswith(f'# Immutavault v{version}\n'), 'README release heading is stale'
@@ -46,11 +48,12 @@ assert f'git checkout v{version}' in readme, 'README install command is not pinn
 assert 'incremental_strict: true' in readme
 assert 'incremental_fallback: false' in readme
 assert 'Broadcom VDDK' in readme and 'not bundled' in readme.lower()
-assert 'file-level recovery' in readme.lower(), 'README does not expose FLR'
-assert 'application_consistency_strict: true' in readme, 'README omits strict application-consistency policy'
-assert 'immutavault-vmware-proxmox-v1' in readme, 'README omits built-in V2V certification id'
-assert 'powered off' in readme.lower(), 'README must state that converted VMs remain powered off'
-assert 'XCP-ng' in readme and 'certified provider' in readme, 'README must preserve XCP-ng provider boundary'
+assert 'file-level recovery' in readme.lower()
+assert 'application_consistency_strict: true' in readme
+assert 'immutavault-vmware-proxmox-v1' in readme
+assert 'powered off' in readme.lower()
+assert 'XCP-ng' in readme and 'certified provider' in readme
+assert 'FLR broker' in readme, 'README must describe v1.0.1 FLR privilege separation'
 
 # Preserve the v0.7.1 strict VMware contract.
 for token in ('incremental_strict: true', 'incremental_fallback: false', 'fail closed', 'fallback_safe'):
@@ -60,15 +63,16 @@ assert 'incremental_strict: true' in incremental_example
 assert 'incremental_fallback: false' in incremental_example
 assert 'application_consistency_strict: true' in incremental_example
 
-# Preserve the v0.8 FLR safety contract.
+# Preserve v0.8 FLR data-safety semantics while moving mount privilege out of the portal.
 assert 'flr:' in config_example and 'mount_root: "/srv/immutavault/flr"' in config_example
 for token in ('restic mount', 'guestmount --ro', 'path traversal', 'symlink'):
     assert token in flr_doc, f'FLR runbook missing safety token: {token}'
 for token in ('--no-lock', 'guestmount', 'does not follow guest symlinks', 'max_download_bytes'):
     assert token in flr_code, f'FLR implementation missing required safety token: {token}'
+for token in ('SO_PEERCRED', 'admin=False', 'DEFAULT_SOCKET', 'RemoteFLRFile', 'owner-only'):
+    assert token in flr_broker, f'FLR broker missing hardening token: {token}'
 
-# v1.0 certified V2V is opt-in and fail-closed. The release may never silently
-# broaden this matrix without updating the contract/tests/docs together.
+# v1.0 certified V2V remains opt-in/fail-closed; v1.0.1 adds target readiness checks.
 for token in (
     'v2v:\n  enabled: false',
     'require_verified_point: true',
@@ -96,6 +100,8 @@ for token in (
 ):
     assert token in v2v_code, f'V2V implementation missing required contract token: {token}'
 assert 'OVF_EXPORT_TRANSPORTS' in v2v_cert and 'NATIVE_INCREMENTAL_TRANSPORTS' in v2v_cert
+assert 'pvesm status --storage' in v2v_cert, 'V2V target storage preflight is missing'
+assert 'ip -o link show dev' in v2v_cert, 'V2V target bridge preflight is missing'
 assert 'cross-hypervisor recovery blocked at execution' in v2v_engine
 assert 'v2v-doctor' in v2v_cli and 'v2v-plan' in v2v_cli
 print(version)
@@ -120,7 +126,7 @@ for f in scripts/*.sh; do bash -n "$f"; done
 pass 'shell scripts parse'
 
 pytest -q
-pass 'unit/security/DR/V2V suite passed'
+pass 'unit/security/DR/V2V/FLR-broker suite passed'
 
 PYTHONPATH=src python3 - <<'PY'
 from immutavault.config import load_config
@@ -137,12 +143,13 @@ pass 'example configurations validate'
 
 PYTHONPATH=src python3 -m immutavault.cli_v10 --help >/dev/null
 PYTHONPATH=src python3 -m immutavault.cli_v10 v2v-plan --help >/dev/null
-pass 'v1.0 source-tree CLI smoke test'
+PYTHONPATH=src python3 -m immutavault.flr_broker --help >/dev/null
+pass 'v1.0.1 source-tree CLI/broker smoke tests'
 
 if command -v systemd-analyze >/dev/null 2>&1; then
   mkdir -p "$TMP/systemd"
   cp systemd/* "$TMP/systemd/"
-  sed -i 's#/usr/local/bin/immutavault#/bin/true#g; s#/usr/bin/env rest-server#/bin/true#g' "$TMP"/systemd/*.service
+  sed -i 's#/usr/local/bin/immutavault-flr-broker#/bin/true#g; s#/usr/local/bin/immutavault#/bin/true#g; s#/usr/bin/env rest-server#/bin/true#g' "$TMP"/systemd/*.service
   if ! systemd-analyze verify "$TMP"/systemd/*.service "$TMP"/systemd/*.timer >"$TMP/systemd.out" 2>&1; then
     cat "$TMP/systemd.out" >&2
     fail 'systemd unit verification failed'
@@ -165,14 +172,16 @@ python3 -m pip install --no-deps --target "$TMP/site" "$WHEEL" >/dev/null
 PYTHONPATH="$TMP/site" python3 - <<PY
 import immutavault
 from immutavault.config import load_config
+from immutavault.flr_broker import FLRBrokerClient
 from immutavault.v2v_config import load_v10_config
 assert immutavault.__version__ == '$VERSION'
 load_config('config/immutavault.example.yml')
 v10 = load_v10_config('config/enterprise-v1.0.example.yml')
 assert v10.v2v.enabled is False
+assert FLRBrokerClient is not None
 print(immutavault.__version__)
 PY
-pass 'built wheel imports and loads production/v1.0 configuration'
+pass 'built wheel imports and loads production/v1.0.1 configuration'
 
 # Static install/data-plane contracts.
 grep -q './scripts/install_restic.sh' scripts/install.sh || fail 'all-in-one installer lacks verified restic path'
@@ -188,12 +197,19 @@ grep -q 'EnvironmentFile=/etc/immutavault/repository.env' systemd/immutavault-re
 grep -q 'libguestfs-tools' scripts/install_appliance.sh || fail 'appliance installer lacks FLR/libguestfs dependency'
 grep -q 'fuse3' scripts/install_appliance.sh || fail 'appliance installer lacks FUSE3 dependency'
 grep -q 'guestmount' scripts/check_flr.sh || fail 'FLR prerequisite checker is missing guestmount gate'
-grep -q 'NoNewPrivileges=false' systemd/immutavault-portal.service || fail 'portal service cannot use packaged FUSE mount helper'
+grep -q 'NoNewPrivileges=true' systemd/immutavault-portal.service || fail 'portal must enforce NoNewPrivileges=true'
+grep -q 'PrivateDevices=true' systemd/immutavault-portal.service || fail 'portal must isolate host devices'
+grep -q '^CapabilityBoundingSet=$' systemd/immutavault-portal.service || fail 'portal capability set must be empty'
+grep -q 'PrivateMounts=true' systemd/immutavault-flr.service || fail 'FLR broker must use a private mount namespace'
+grep -q 'User=root' systemd/immutavault-flr.service || fail 'FLR broker service identity contract changed unexpectedly'
+grep -q 'immutavault-flr.service' scripts/install.sh || fail 'installer does not enable FLR broker'
+grep -q 'immutavault-flr-broker' scripts/install_controller.sh || fail 'controller installer lacks broker entrypoint'
+! grep -q 'usermod -a -G fuse immutavault' scripts/install_controller.sh || fail 'portal identity is still granted fuse group access'
 grep -q 'virt-v2v --machine-readable' scripts/check_v2v.sh || fail 'V2V capability checker lacks machine-readable probe'
 grep -q 'input:ova' scripts/check_v2v.sh || fail 'V2V capability checker lacks OVA input gate'
 grep -q 'output:local' scripts/check_v2v.sh || fail 'V2V capability checker lacks local output gate'
 pass 'restic/rest-server installs are pinned, checksummed and capability-gated'
-pass 'FLR installation contract is present'
-pass 'V2V conversion capability gate is present'
+pass 'FLR privilege separation and installation contract are present'
+pass 'V2V conversion and target-readiness gates are present'
 
 printf '\nALL RELEASE CHECKS PASSED for Immutavault %s\n' "$VERSION"
