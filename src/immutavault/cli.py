@@ -8,7 +8,7 @@ from .enterprise_config import load_enterprise_config
 from .engine import BackupEngine
 from .hardware import hardware_report
 from .lock import exclusive_lock
-from .portal_v09 import Portal
+from .portal_enterprise import Portal
 
 
 def _parser() -> argparse.ArgumentParser:
