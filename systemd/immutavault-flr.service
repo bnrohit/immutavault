@@ -1,0 +1,35 @@
+[Unit]
+Description=Immutavault privileged file-level recovery broker
+After=network-online.target
+Wants=network-online.target
+Before=immutavault-portal.service
+StartLimitIntervalSec=0
+
+[Service]
+UMask=0007
+Type=simple
+User=root
+Group=immutavault
+EnvironmentFile=/etc/immutavault/immutavault.env
+ExecStart=/usr/local/bin/immutavault-flr-broker --config /etc/immutavault/immutavault.yml --socket /run/immutavault/flr.sock
+Restart=on-failure
+RestartSec=2
+RuntimeDirectory=immutavault
+RuntimeDirectoryMode=0750
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateMounts=true
+# libguestfs/qemu and FUSE need access to host devices. This privilege is kept
+# in the local broker and is deliberately not granted to the network portal.
+PrivateDevices=false
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+LockPersonality=true
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER CAP_SETUID CAP_SETGID
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target
