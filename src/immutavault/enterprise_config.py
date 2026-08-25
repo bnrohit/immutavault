@@ -49,6 +49,7 @@ class ObservabilityConfig:
     websocket_enabled: bool = True
     websocket_listen: str = "127.0.0.1"
     websocket_port: int = 8788
+    websocket_public_url: str | None = None
     websocket_poll_seconds: int = 2
     websocket_ticket_ttl_seconds: int = 60
     websocket_allowed_origins: list[str] = field(default_factory=list)
@@ -234,6 +235,9 @@ def load_enterprise_config(path: str | Path) -> EnterpriseConfig:
     websocket_port = _bounded_int(obs_raw.get("websocket_port", 8788), "observability.websocket_port", minimum=1, maximum=65535)
     if websocket_port == core.portal.port and bool(obs_raw.get("websocket_enabled", True)):
         raise ValueError("observability.websocket_port must differ from portal.port")
+    websocket_public_url = str(obs_raw.get("websocket_public_url") or "").rstrip("/") or None
+    if websocket_public_url and not (websocket_public_url.startswith("ws://") or websocket_public_url.startswith("wss://")):
+        raise ValueError("observability.websocket_public_url must start with ws:// or wss://")
     observability = ObservabilityConfig(
         metrics_enabled=bool(obs_raw.get("metrics_enabled", True)),
         metrics_path=metrics_path,
@@ -241,6 +245,7 @@ def load_enterprise_config(path: str | Path) -> EnterpriseConfig:
         websocket_enabled=bool(obs_raw.get("websocket_enabled", True)),
         websocket_listen=str(obs_raw.get("websocket_listen", "127.0.0.1")),
         websocket_port=websocket_port,
+        websocket_public_url=websocket_public_url,
         websocket_poll_seconds=_bounded_int(obs_raw.get("websocket_poll_seconds", 2), "observability.websocket_poll_seconds", minimum=1, maximum=60),
         websocket_ticket_ttl_seconds=_bounded_int(obs_raw.get("websocket_ticket_ttl_seconds", 60), "observability.websocket_ticket_ttl_seconds", minimum=15, maximum=300),
         websocket_allowed_origins=_string_list(obs_raw.get("websocket_allowed_origins")),
