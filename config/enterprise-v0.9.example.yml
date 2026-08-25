@@ -1,0 +1,171 @@
+repository:
+  url: "rest:https://backup.example.com:8000/"
+  local_path: "/srv/immutavault/repository"
+  staging_path: "/srv/immutavault/staging"
+  cacert: "/etc/immutavault/tls/ca.crt"
+  verify_percent: 5
+  lock_file: "/run/lock/immutavault.lock"
+  retention:
+    keep_within_days: 30
+    keep_daily: 30
+    keep_weekly: 8
+    keep_monthly: 12
+    keep_yearly: 3
+    min_restore_points: 2
+
+runtime:
+  state_db: "/var/lib/immutavault/state.db"
+  command_timeout_seconds: 14400
+  keep_staging_on_failure: true
+  restore_staging_path: "/srv/immutavault/restore-staging"
+  verify_staging_path: "/srv/immutavault/verify-staging"
+  staging_min_free_percent: 10
+  state_backup_path: "/var/lib/immutavault/state-backups"
+  state_backup_keep: 288
+
+protection:
+  rpo_target_minutes: 1440
+  anomaly_data_added_ratio: 0.70
+  anomaly_size_change_ratio: 0.50
+  preserve_suspicious_points_days: 90
+  verify_after_backup: false
+  require_four_eyes_restore: true
+
+# Each enabled platform must belong to exactly one tenant. Overlapping patterns
+# fail configuration validation rather than risking cross-tenant disclosure.
+tenants:
+  - id: "campus-a"
+    name: "Campus A"
+    platforms: ["vc-campus-a", "pve-campus-a"]
+  - id: "campus-b"
+    name: "Campus B"
+    platforms: ["vc-campus-b"]
+
+portal:
+  enabled: true
+  listen: "0.0.0.0"
+  port: 8787
+  tls_cert: "/etc/immutavault/tls/portal.crt"
+  tls_key: "/etc/immutavault/tls/portal.key"
+  # Local tokens are ignored when OIDC is enabled unless allow_local_tokens is
+  # explicitly set true. Keep them configured only as a documented break-glass path.
+  users:
+    - name: "break-glass-admin"
+      role: "admin"
+      token_env: "IMMUTAVAULT_ADMIN_TOKEN"
+      tenants: ["*"]
+      sources: ["*"]
+      vm_patterns: ["*"]
+
+identity:
+  oidc:
+    enabled: true
+    # Use a tenant-specific Microsoft Entra v2.0 authority, not common/organizations.
+    issuer: "https://login.microsoftonline.com/11111111-2222-3333-4444-555555555555/v2.0"
+    client_id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    client_secret_env: "IMMUTAVAULT_ENTRA_CLIENT_SECRET"
+    redirect_uri: "https://backup.example.com/auth/callback"
+    session_secret_env: "IMMUTAVAULT_OIDC_SESSION_SECRET"
+    session_minutes: 60
+    require_mfa: true
+    allowed_tenant_ids: ["11111111-2222-3333-4444-555555555555"]
+    # Optional Entra Authentication Context IDs that also satisfy the MFA gate.
+    required_acrs: []
+    # Default false: OIDC becomes the only interactive portal authentication path.
+    allow_local_tokens: false
+    default_role: "viewer"
+    default_tenants: []
+
+    # Map immutable Entra group object IDs to Immutavault roles.
+    group_role_map:
+      "10000000-0000-0000-0000-000000000001": "admin"
+      "10000000-0000-0000-0000-000000000002": "approver"
+      "10000000-0000-0000-0000-000000000003": "restore_operator"
+
+    # A user receives only the tenant scopes associated with their Entra groups.
+    group_tenant_map:
+      "20000000-0000-0000-0000-000000000001": ["campus-a"]
+      "20000000-0000-0000-0000-000000000002": ["campus-b"]
+
+    # App-role claims are supported as an alternative to group claims.
+    app_role_map:
+      "Immutavault.Admin": "admin"
+      "Immutavault.Approver": "approver"
+      "Immutavault.RestoreOperator": "restore_operator"
+    app_role_tenant_map: {}
+
+observability:
+  metrics_enabled: true
+  metrics_path: "/metrics"
+  metrics_token_env: "IMMUTAVAULT_METRICS_TOKEN"
+  include_platform_labels: true
+
+  websocket_enabled: true
+  websocket_listen: "0.0.0.0"
+  websocket_port: 8788
+  # Set this when a reverse proxy or load balancer exposes another public URL.
+  websocket_public_url: "wss://backup.example.com:8788"
+  websocket_poll_seconds: 2
+  websocket_ticket_ttl_seconds: 60
+  websocket_allowed_origins:
+    - "https://backup.example.com"
+
+flr:
+  enabled: true
+  mount_root: "/srv/immutavault/flr"
+  session_ttl_minutes: 30
+  max_download_bytes: 5368709120
+  max_sessions_per_user: 2
+  max_disks: 16
+  mount_wait_seconds: 30
+
+platforms:
+  - name: "vc-campus-a"
+    type: "vmware"
+    enabled: false
+    endpoint: "https://vcenter-a.example.local/sdk"
+    mode: "vddk"
+    include: ["*"]
+    exclude: []
+    options:
+      username_env: "VC_A_USERNAME"
+      password_env: "VC_A_PASSWORD"
+      insecure: false
+      vddk_helper: "/usr/local/bin/immutavault-vddk"
+      incremental_strict: true
+      incremental_fallback: false
+      application_consistency_strict: true
+      quiesce: true
+      quiesce_fallback_crash_consistent: false
+
+  - name: "pve-campus-a"
+    type: "proxmox"
+    enabled: false
+    endpoint: "pve-a.example.local"
+    ssh_user: "backupsvc"
+    mode: "vzdump"
+    include: ["*"]
+    exclude: []
+    options:
+      compress: "0"
+      restore_storage: "local-lvm"
+
+  - name: "vc-campus-b"
+    type: "vmware"
+    enabled: false
+    endpoint: "https://vcenter-b.example.local/sdk"
+    mode: "hot-clone-export"
+    include: ["*"]
+    exclude: []
+    options:
+      username_env: "VC_B_USERNAME"
+      password_env: "VC_B_PASSWORD"
+      insecure: false
+      quiesce: true
+      quiesce_fallback_crash_consistent: false
+      application_consistency_strict: true
+
+replicas: []
+
+disaster_recovery:
+  enabled: false
