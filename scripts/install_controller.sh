@@ -58,12 +58,14 @@ PYEOF
 "$TARGET/bin/python" -m compileall -q "$TARGET/lib"
 "$TARGET/bin/immutavault" --help >/dev/null
 "$TARGET/bin/immutavault-setup" --help >/dev/null
+"$TARGET/bin/immutavault-flr-broker" --help >/dev/null
 
 PREVIOUS=$(readlink -f "$CURRENT" 2>/dev/null || true)
 ln -sfn "$TARGET" "${CURRENT}.new"
 mv -Tf "${CURRENT}.new" "$CURRENT"
 ln -sfn "$CURRENT/bin/immutavault" /usr/local/bin/immutavault
 ln -sfn "$CURRENT/bin/immutavault-setup" /usr/local/bin/immutavault-setup
+ln -sfn "$CURRENT/bin/immutavault-flr-broker" /usr/local/bin/immutavault-flr-broker
 if [[ -n "$PREVIOUS" && "$PREVIOUS" != "$TARGET" ]]; then
   printf '%s\n' "$PREVIOUS" > "$BASE/previous-release"
 fi
@@ -73,9 +75,11 @@ rm -rf "$BUILD_TMP"
 
 install -d -o root -g immutavault -m 0750 /etc/immutavault
 install -d -o immutavault -g immutavault -m 0750 /var/lib/immutavault "$ROOT/staging" "$ROOT/restore-staging" "$ROOT/verify-staging"
-install -d -o immutavault -g immutavault -m 0700 "$ROOT/flr"
-if getent group fuse >/dev/null 2>&1; then
-  usermod -a -G fuse immutavault
+# Only the root FLR broker mounts recovery points. The network portal must not
+# own the mount tree or inherit direct /dev/fuse access.
+install -d -o root -g root -m 0700 "$ROOT/flr"
+if getent group fuse >/dev/null 2>&1 && id -nG immutavault | tr ' ' '\n' | grep -qx fuse; then
+  gpasswd -d immutavault fuse >/dev/null 2>&1 || true
 fi
 
 if [[ ! -f /etc/immutavault/immutavault.yml ]]; then
@@ -100,7 +104,7 @@ else
   echo "IMMUTAVAULT_REPO_ROOT=$ROOT" >> /etc/immutavault/immutavault.env
 fi
 
-# v0.9 upgrades must add the new secrets without rotating existing backup or
+# Enterprise upgrades add these secrets without rotating existing backup or
 # portal credentials. They are generated once and remain root-readable only.
 if ! grep -q '^IMMUTAVAULT_OIDC_SESSION_SECRET=' /etc/immutavault/immutavault.env; then
   echo "IMMUTAVAULT_OIDC_SESSION_SECRET=$(openssl rand -base64 48 | tr -d '\n')" >> /etc/immutavault/immutavault.env
