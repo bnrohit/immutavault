@@ -90,12 +90,23 @@ RESTIC_PASSWORD=$(openssl rand -base64 48 | tr -d '\n')
 IMMUTAVAULT_CUSTOMER_TOKEN=$(openssl rand -hex 32)
 IMMUTAVAULT_APPROVER_TOKEN=$(openssl rand -hex 32)
 IMMUTAVAULT_ADMIN_TOKEN=$(openssl rand -hex 32)
+IMMUTAVAULT_OIDC_SESSION_SECRET=$(openssl rand -base64 48 | tr -d '\n')
+IMMUTAVAULT_METRICS_TOKEN=$(openssl rand -hex 32)
 IMMUTAVAULT_REPO_ROOT=$ROOT
 ENV
 elif grep -q '^IMMUTAVAULT_REPO_ROOT=' /etc/immutavault/immutavault.env; then
   sed -i "s|^IMMUTAVAULT_REPO_ROOT=.*|IMMUTAVAULT_REPO_ROOT=$ROOT|" /etc/immutavault/immutavault.env
 else
   echo "IMMUTAVAULT_REPO_ROOT=$ROOT" >> /etc/immutavault/immutavault.env
+fi
+
+# v0.9 upgrades must add the new secrets without rotating existing backup or
+# portal credentials. They are generated once and remain root-readable only.
+if ! grep -q '^IMMUTAVAULT_OIDC_SESSION_SECRET=' /etc/immutavault/immutavault.env; then
+  echo "IMMUTAVAULT_OIDC_SESSION_SECRET=$(openssl rand -base64 48 | tr -d '\n')" >> /etc/immutavault/immutavault.env
+fi
+if ! grep -q '^IMMUTAVAULT_METRICS_TOKEN=' /etc/immutavault/immutavault.env; then
+  echo "IMMUTAVAULT_METRICS_TOKEN=$(openssl rand -hex 32)" >> /etc/immutavault/immutavault.env
 fi
 chown root:immutavault /etc/immutavault/immutavault.env
 chmod 640 /etc/immutavault/immutavault.env
