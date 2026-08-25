@@ -2,12 +2,18 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
+import shlex
 from typing import Any
 import xml.etree.ElementTree as ET
 
+from .adapters.proxmox import ProxmoxAdapter
 from .config import PlatformConfig
+from .runner import run
 from .v2v import (
+    BRIDGE_RE,
     BUILTIN_PAIR,
+    STORAGE_RE,
     ConvertedBundle,
     ConvertedNIC,
     V2VInspection,
@@ -119,6 +125,105 @@ class CertifiedV2VManager(V2VManager):
         elif bundle.nics and self.cfg.v2v.require_network_mapping:
             raise RuntimeError("source NIC network identity is unavailable; refusing to guess target bridge mapping")
         return bundle
+
+    def _proxmox_storage_ids(self, target: PlatformConfig, options: dict[str, Any]) -> tuple[str, ...]:
+        storage = str(
+            options.get("storage")
+            or target.options.get("v2v_storage")
+            or target.options.get("restore_storage")
+            or ""
+        ).strip()
+        if not storage or not STORAGE_RE.fullmatch(storage):
+            raise RuntimeError("Proxmox V2V target storage is missing or invalid")
+        values = [storage]
+        efi_storage = str(options.get("efi_storage") or target.options.get("v2v_efi_storage") or storage).strip()
+        if efi_storage:
+            if not STORAGE_RE.fullmatch(efi_storage):
+                raise RuntimeError("Proxmox V2V EFI storage id is invalid")
+            if efi_storage not in values:
+                values.append(efi_storage)
+        return tuple(values)
+
+    def _preflight_proxmox_storage(self, target: PlatformConfig, options: dict[str, Any]) -> None:
+        """Fail before conversion when the target image storage is unavailable.
+
+        `pvesm status --content images --enabled 1` is authoritative for whether
+        a configured Proxmox storage can currently accept QEMU VM images.
+        """
+        adapter = ProxmoxAdapter(target, self.cfg.runtime.command_timeout_seconds)
+        for storage in self._proxmox_storage_ids(target, options):
+            command = (
+                "pvesm status --storage " + shlex.quote(storage)
+                + " --content images --enabled 1"
+            )
+            result = run(adapter._ssh() + [command], timeout=60, check=False)
+            if result.returncode != 0:
+                detail = (result.stderr or result.stdout or "pvesm status failed").strip()
+                raise RuntimeError(f"Proxmox V2V storage preflight failed for {storage!r}: {detail}")
+            rows = [line.split() for line in result.stdout.splitlines() if line.strip()]
+            matched = [row for row in rows if row and row[0] == storage]
+            if not matched:
+                raise RuntimeError(
+                    f"Proxmox V2V storage {storage!r} is not enabled/available for VM image content"
+                )
+            if not any(any(value.lower() == "active" for value in row[1:4]) for row in matched):
+                raise RuntimeError(f"Proxmox V2V storage {storage!r} is not active")
+
+    def _preflight_proxmox_bridges(self, bundle: ConvertedBundle, target: PlatformConfig, options: dict[str, Any]) -> list[str]:
+        adapter = ProxmoxAdapter(target, self.cfg.runtime.command_timeout_seconds)
+        bridges = self._mapped_bridges(bundle, target, options)
+        for bridge in sorted(set(bridges)):
+            if not BRIDGE_RE.fullmatch(bridge):
+                raise RuntimeError(f"unsafe or invalid Proxmox bridge name: {bridge!r}")
+            result = run(
+                adapter._ssh() + ["ip -o link show dev " + shlex.quote(bridge)],
+                timeout=30,
+                check=False,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(f"Proxmox V2V target bridge {bridge!r} does not exist on the selected node")
+        return bridges
+
+    def _restore_proxmox(
+        self,
+        bundle: ConvertedBundle,
+        target: PlatformConfig,
+        target_name: str,
+        options: dict[str, Any],
+        *,
+        dry_run: bool,
+    ) -> dict[str, Any]:
+        if not dry_run:
+            # Storage was checked before conversion; repeat it immediately before
+            # target creation and validate every mapped bridge to close the race.
+            self._preflight_proxmox_storage(target, options)
+            self._preflight_proxmox_bridges(bundle, target, options)
+        return super()._restore_proxmox(bundle, target, target_name, options, dry_run=dry_run)
+
+    def execute(
+        self,
+        *,
+        source: Path,
+        point: dict[str, Any],
+        target: PlatformConfig,
+        target_name: str,
+        options: dict[str, Any],
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        plan = self.plan(point, target, options)
+        if plan.allowed and plan.mode == "builtin" and self._pair(str(point.get("platform_type") or ""), target.type) == BUILTIN_PAIR:
+            # A read-only target storage check happens before a potentially long
+            # virt-v2v conversion so an offline/disabled datastore fails fast.
+            if not dry_run:
+                self._preflight_proxmox_storage(target, options)
+        return super().execute(
+            source=source,
+            point=point,
+            target=target,
+            target_name=target_name,
+            options=options,
+            dry_run=dry_run,
+        )
 
     def plan(self, point: dict[str, Any], target: PlatformConfig, options: dict[str, Any] | None = None) -> V2VPlan:
         plan = super().plan(point, target, options)
