@@ -6,7 +6,7 @@ Before=immutavault-portal.service
 StartLimitIntervalSec=0
 
 [Service]
-UMask=0007
+UMask=0077
 Type=simple
 User=root
 Group=immutavault
