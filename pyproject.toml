@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "immutavault"
-version = "0.9.0"
-description = "Highly available immutable VM backup, recovery, replication and DR orchestrator for VMware/vCenter, Proxmox VE, and XCP-ng"
+version = "1.0.0"
+description = "Highly available immutable VM backup, certified V2V recovery, replication and DR orchestrator for VMware/vCenter, Proxmox VE, and XCP-ng"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "Apache-2.0"}
@@ -16,7 +16,7 @@ dependencies = ["PyYAML>=6.0,<7", "boto3>=1.34,<2"]
 dev = ["pytest>=8,<9"]
 
 [project.scripts]
-immutavault = "immutavault.cli:main"
+immutavault = "immutavault.cli_v10:main"
 immutavault-setup = "immutavault.setup_wizard:main"
 
 [tool.setuptools.packages.find]
