@@ -1,6 +1,6 @@
-# Certified Enterprise V2V — Immutavault v1.0
+# Certified Enterprise V2V — Immutavault v1.0.1
 
-Immutavault v1.0 introduces cross-hypervisor recovery behind an explicit certification policy. The feature is designed for disaster recovery and migration, where a conversion that merely imports disks but does not boot reliably is not a successful recovery.
+Immutavault v1.0 introduced cross-hypervisor recovery behind an explicit certification policy. v1.0.1 hardens that pipeline with live target-readiness checks before expensive conversion work and again immediately before target creation.
 
 `certified` in this document means **tested against the Immutavault safety and acceptance profile**. It does not imply certification, endorsement, or support by Broadcom/VMware, Proxmox, Vates, XCP-ng, Red Hat, or any other vendor unless a separate vendor agreement states that explicitly.
 
@@ -15,11 +15,13 @@ Cross-hypervisor recovery remains fail-closed unless all of the following are tr
 5. The source recovery-point format is accepted by the selected certified path.
 6. Conversion tooling passes capability/version checks.
 7. Guest OS, architecture, firmware, disk count, capacity, Secure Boot/TPM state and driver prerequisites fit the certification matrix.
-8. Every target NIC has an explicit or deliberately configured fallback mapping.
-9. The target VM ID/name does not already exist.
-10. The immutable source is restored to staging and its SHA-256 manifest is verified before conversion.
-11. The converted target is created as a **new VM**. Source workloads are never modified by V2V.
-12. The converted VM remains **powered off** after automatic conversion. Isolated boot acceptance is a separate operator step.
+8. Target Proxmox VM-image storage is enabled and active at execution time.
+9. Every target NIC has an explicit or deliberately configured fallback mapping.
+10. Every selected Proxmox bridge exists immediately before target creation.
+11. The target VM ID/name does not already exist.
+12. The immutable source is restored to staging and its SHA-256 manifest is verified before conversion.
+13. The converted target is created as a **new VM**. Source workloads are never modified by V2V.
+14. The converted VM remains **powered off** after automatic conversion. Isolated boot acceptance is a separate operator step.
 
 A failure at any stage must not cause automatic conversion through a different hypervisor path.
 
@@ -27,9 +29,9 @@ A failure at any stage must not cause automatic conversion through a different h
 
 ### VMware/vCenter -> Proxmox VE
 
-Status: **built-in v1.0 certified pipeline** for the scope below.
+Status: **built-in v1.0 certified pipeline with v1.0.1 target-readiness hardening** for the scope below.
 
-| Dimension | v1.0 built-in scope |
+| Dimension | Built-in scope |
 | --- | --- |
 | Source recovery format | VMware OVF/export-style recovery point |
 | Source transports | `hot-clone-export`, `snapshot-clone-export`, `hot`, `export`, `cold-export` |
@@ -39,18 +41,21 @@ Status: **built-in v1.0 certified pipeline** for the scope below.
 | Guest OS families | Linux and Windows when `virt-v2v` reports support |
 | Conversion engine | `virt-v2v` >= 2.12.0 with required machine-readable capabilities |
 | Disk output | sparse qcow2, imported to configured Proxmox storage |
+| Target storage readiness | configured image storage must be enabled and active |
 | Target disk bus | VirtIO |
 | Windows VirtIO | signed driver source required (`VIRTIO_WIN` or `/usr/share/virtio-win`) |
 | Legacy BIOS | preserved as SeaBIOS |
 | UEFI | preserved as OVMF/q35 with a new target EFI disk |
+| EFI storage | checked only for an attested UEFI guest |
 | Source Secure Boot | blocked by default |
 | Source vTPM | blocked |
 | NICs | VirtIO NICs, MAC preserved where conversion metadata provides it |
 | Network attachment | explicit source-network -> Proxmox bridge mapping |
+| Bridge readiness | every mapped bridge must exist before VM creation |
 | Existing target overwrite | prohibited |
 | Automatic target power-on | prohibited |
 
-The built-in path packages the verified VMware OVF payload into a temporary OVA, inspects it with `virt-v2v-inspector`, converts with `virt-v2v -i ova -o local`, validates output with `qemu-img`, creates a new Proxmox VM, imports the converted disks, maps them to VirtIO buses, remaps NICs, validates the resulting `qm config`, and leaves the VM powered off.
+The built-in path first checks primary target image-storage readiness, packages the verified VMware OVF payload into a temporary OVA, inspects it with `virt-v2v-inspector`, converts with `virt-v2v -i ova -o local`, validates output with `qemu-img`, rechecks required storage after firmware inspection, validates all mapped bridges, creates a new Proxmox VM, imports the converted disks, maps them to VirtIO buses, remaps NICs, validates the resulting `qm config`, and leaves the VM powered off.
 
 ### VMware VDDK/CBT recovery points
 
@@ -60,9 +65,9 @@ For planned cross-hypervisor DR, maintain an export-format recovery point accord
 
 ### VMware/Proxmox -> XCP-ng
 
-Status: **blocked in the built-in v1.0 core**.
+Status: **blocked in the built-in v1.0/v1.0.1 core**.
 
-Upstream `virt-v2v` supports QEMU/KVM output; Immutavault does not pretend that this is equivalent to a native XCP-ng/Xen conversion pipeline. XCP-ng recovery requires a separately tested provider configured through the v1.0 provider protocol. Without that provider, the request is rejected before conversion begins.
+Upstream `virt-v2v` supports QEMU/KVM output; Immutavault does not pretend that this is equivalent to a native XCP-ng/Xen conversion pipeline. XCP-ng recovery requires a separately tested provider configured through the provider protocol. Without that provider, the request is rejected before conversion begins.
 
 ### Other source/target pairs
 
@@ -90,7 +95,7 @@ v2v:
 
 The recommended production posture is to leave `allow_suspicious_points: false` and `allow_secure_boot: false` until an environment-specific acceptance profile has explicitly validated those cases.
 
-## Proxmox target policy
+## Proxmox target policy and v1.0.1 readiness gate
 
 Example target:
 
@@ -110,7 +115,21 @@ platforms:
         "Database": vmbr30
 ```
 
-`v2v_storage` is mandatory for the built-in path. UEFI conversion also needs valid EFI storage. Network mappings are validated before target creation when possible. A missing mapping fails the conversion when `require_network_mapping: true`.
+`v2v_storage` is mandatory for the built-in path. UEFI conversion additionally needs valid EFI storage. v1.0.1 checks the primary datastore **before conversion** using the equivalent of:
+
+```bash
+pvesm status --storage local-lvm --content images --enabled 1
+```
+
+The selected storage must appear as active and enabled for VM-image content. After guest firmware is known, Immutavault repeats the required storage check; EFI storage is checked only for UEFI guests.
+
+Immediately before target creation, every mapped bridge is checked on the selected Proxmox node using the equivalent of:
+
+```bash
+ip -o link show dev vmbr20
+```
+
+A missing bridge fails the restore before the new VM is created. These are **point-in-time readiness checks**, not storage-capacity reservations; production operations must still monitor capacity and headroom separately.
 
 Do not map production networks casually during testing. For acceptance, map all converted NICs to an isolated recovery VLAN/bridge first.
 
@@ -132,11 +151,11 @@ Windows guests should be cleanly shut down for a migration test and should not b
 
 ### Legacy BIOS
 
-Legacy BIOS guests are created with Proxmox SeaBIOS and converted disks on VirtIO buses.
+Legacy BIOS guests are created with Proxmox SeaBIOS and converted disks on VirtIO buses. An unrelated `v2v_efi_storage` setting is not required to pass readiness checks for a BIOS guest.
 
 ### UEFI
 
-UEFI guests are created using OVMF/q35 and a new Proxmox EFI disk. The source EFI variables are not assumed to be portable firmware state.
+UEFI guests are created using OVMF/q35 and a new Proxmox EFI disk. The source EFI variables are not assumed to be portable firmware state. Both primary image storage and configured EFI storage must be active for VM-image content before target creation.
 
 ### Secure Boot
 
@@ -168,7 +187,7 @@ An eligible built-in plan reports:
 }
 ```
 
-A native VDDK recovery point, unverified point, suspicious point, unsupported target pair or missing target storage/network policy returns `allowed: false` with explicit reasons.
+A native VDDK recovery point, unverified point, suspicious point, unsupported target pair or missing target storage/network policy returns `allowed: false` with explicit reasons. Live target storage/bridge availability is checked at execution because it can change after planning.
 
 ## Tooling preflight
 
@@ -185,7 +204,7 @@ The built-in profile requires:
 - `virt-v2v-inspector`;
 - `qemu-img`;
 - `virt-v2v --machine-readable` features `input:ova`, `output:local`, `convert:linux`, and `convert:windows`;
-- SSH/SCP and Proxmox `qm`, `pvesh`, and related adapter prerequisites;
+- SSH/SCP and Proxmox `qm`, `pvesh`, `pvesm`, `ip`, and related adapter prerequisites;
 - signed VirtIO Windows drivers for Windows V2V.
 
 Immutavault does not silently install an unpinned third-party conversion stack. Install and lifecycle-manage a supported `virt-v2v` build that meets the version/capability gate.
@@ -198,15 +217,17 @@ Immutavault does not silently install an unpinned third-party conversion stack. 
 4. Create a restore request through CLI/API/portal.
 5. A separate approver approves it when four-eyes policy is enabled.
 6. Execute the restore.
-7. Immutavault restores the encrypted source point to staging.
-8. SHA-256 manifest verification must pass.
-9. Guest conversion/driver/boot adaptation runs in temporary scratch space.
-10. A new powered-off target VM is created.
-11. Converted disks and NICs are attached and the target configuration is validated.
-12. The restore result and certification profile are written to the tamper-evident audit trail.
-13. Operator boots the target only on an isolated recovery network.
-14. OS, storage, NIC, DNS, application, data integrity and security controls are validated.
-15. Production routing/IP ownership changes only after the acceptance record is approved.
+7. Immutavault verifies primary Proxmox image storage is active before conversion begins.
+8. Immutavault restores the encrypted source point to staging.
+9. SHA-256 manifest verification must pass.
+10. Guest conversion/driver/boot adaptation runs in temporary scratch space.
+11. Firmware-specific storage and every mapped bridge are rechecked.
+12. A new powered-off target VM is created.
+13. Converted disks and NICs are attached and the target configuration is validated.
+14. The restore result and certification profile are written to the tamper-evident audit trail.
+15. Operator boots the target only on an isolated recovery network.
+16. OS, storage, NIC, DNS, application, data integrity and security controls are validated.
+17. Production routing/IP ownership changes only after the acceptance record is approved.
 
 ## Provider protocol for XCP-ng and other pairs
 
@@ -287,16 +308,18 @@ For each test capture:
 2. Immutavault version and V2V certification ID;
 3. `virt-v2v`/`qemu-img` versions;
 4. source OS/architecture/firmware inspection;
-5. target VM ID/name;
-6. disk and NIC mapping;
-7. isolated boot result;
-8. guest storage visibility;
-9. network reachability on recovery VLAN only;
-10. OS logs/driver health;
-11. application start and data-integrity test;
-12. shutdown/reboot test;
-13. rollback/delete-new-target test;
-14. approver/operator identities from the audit trail.
+5. target storage-readiness evidence;
+6. target VM ID/name;
+7. disk and NIC mapping;
+8. bridge-readiness evidence;
+9. isolated boot result;
+10. guest storage visibility;
+11. network reachability on recovery VLAN only;
+12. OS logs/driver health;
+13. application start and data-integrity test;
+14. shutdown/reboot test;
+15. rollback/delete-new-target test;
+16. approver/operator identities from the audit trail.
 
 A test of one Windows release or one Linux distribution does not certify every guest in the estate.
 
@@ -318,15 +341,16 @@ Cross-hypervisor V2V does not remove normal DR fencing requirements. Before putt
 
 Conversion solves the compute-format problem; it does not make split-brain networking safe by itself.
 
-## Deliberate v1.0 boundaries
+## Deliberate v1.0.1 boundaries
 
 - Built-in automatic V2V is VMware export-format -> Proxmox KVM only.
 - Native VMware VDDK/CBT layouts need an appropriate certified provider or a separate export-format recovery point.
 - XCP-ng targets require a separately certified provider.
 - Source Secure Boot is blocked by default.
 - Source vTPM is blocked.
-- ARM/aarch64 guests are outside the built-in v1.0 conversion matrix.
+- ARM/aarch64 guests are outside the built-in conversion matrix.
 - Automatic cross-tenant conversion remains prohibited.
 - Existing target overwrite remains prohibited.
 - Automatic target power-on remains prohibited.
+- Target-readiness checks are point-in-time gates, not capacity reservations.
 - A successful conversion is not declared production-ready until isolated boot/application acceptance passes.
