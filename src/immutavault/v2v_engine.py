@@ -27,6 +27,13 @@ class CertifiedBackupEngine(BackupEngine):
         super().__init__(cfg)
         self.v2v = V2VManager(cfg)
 
+    def doctor(self) -> dict[str, list[str]]:
+        result = super().doctor()
+        if self.cfg.v2v.enabled:
+            for name, problems in self.v2v.doctor().items():
+                result[f"v2v:{name}"] = list(problems)
+        return result
+
     def v2v_plan(self, snapshot_id: str, target_platform: str, options: dict[str, Any] | None = None) -> dict[str, Any]:
         point = self.state.get_point(snapshot_id)
         if not point:
@@ -115,7 +122,7 @@ class CertifiedBackupEngine(BackupEngine):
                 "target_name": req["target_name"],
                 "source_repository": source_repository,
                 "v2v": plan.to_dict(),
-                "note": "execution restores and verifies the immutable point before conversion; the source VM is never modified and the target is created as a new VM",
+                "note": "execution restores and verifies the immutable point before conversion; the source VM is never modified and the target is created as a new powered-off VM",
             }
         self._ensure_path_capacity(self.cfg.runtime.restore_staging_path, action="V2V restore")
         target_adapter = build_adapter(target_cfg, self.cfg.runtime.command_timeout_seconds)
