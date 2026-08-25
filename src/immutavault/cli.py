@@ -4,11 +4,11 @@ import argparse
 import json
 import sys
 
-from .config import load_config
+from .enterprise_config import load_enterprise_config
 from .engine import BackupEngine
 from .hardware import hardware_report
 from .lock import exclusive_lock
-from .portal import Portal
+from .portal_v09 import Portal
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -86,7 +86,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "hardware":
         print(json.dumps(hardware_report(), indent=2)); return 0
 
-    cfg = load_config(args.config)
+    cfg = load_enterprise_config(args.config)
     engine = BackupEngine(cfg)
     if args.command == "doctor":
         result = engine.doctor(); print(json.dumps(result, indent=2)); return 1 if any(result.values()) else 0
