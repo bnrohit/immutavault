@@ -1,7 +1,7 @@
 [Unit]
 Description=Immutavault self-service recovery portal
-After=network-online.target
-Wants=network-online.target
+After=network-online.target immutavault-flr.service
+Wants=network-online.target immutavault-flr.service
 StartLimitIntervalSec=0
 
 [Service]
@@ -13,13 +13,18 @@ EnvironmentFile=/etc/immutavault/immutavault.env
 ExecStart=/usr/local/bin/immutavault --config /etc/immutavault/immutavault.yml portal
 Restart=always
 RestartSec=2
-# FUSE3 fusermount is commonly setuid-root. no_new_privs would block the
-# kernel mount helper even though the portal itself remains User=immutavault.
-NoNewPrivileges=false
+# The portal is network-facing and never mounts recovery filesystems itself.
+# FUSE/libguestfs operations are isolated in immutavault-flr.service.
+NoNewPrivileges=true
 PrivateTmp=true
-PrivateDevices=false
+PrivateDevices=true
 ProtectSystem=full
 ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+LockPersonality=true
+RestrictSUIDSGID=true
 CapabilityBoundingSet=
 AmbientCapabilities=
 
