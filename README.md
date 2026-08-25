@@ -1,93 +1,158 @@
-# Immutavault v0.9.0
+# Immutavault v1.0.0
 
-Immutavault is an open, vendor-neutral **immutable VM backup, recovery, replication, file-level recovery and disaster-recovery orchestrator** for VMware/vCenter, Proxmox VE and XCP-ng.
+Immutavault is an open, vendor-neutral **immutable VM backup, recovery, certified V2V conversion, replication, file-level recovery and disaster-recovery orchestrator** for VMware/vCenter, Proxmox VE and XCP-ng.
 
-The security principle remains simple: **the identity that creates backups does not receive prune/delete authority.** The normal controller writes through an append-only repository service; retention/prune is separated. Recovery is similarly conservative: restore operations create a **new VM** and refuse implicit production overwrite.
+The security principle remains simple: **the identity that creates backups does not receive prune/delete authority.** The controller writes through an append-only repository service, retention/prune is separated, recovery creates a **new VM** by default, and v1.0 cross-hypervisor conversion stays fail-closed unless a tested conversion profile explicitly permits the exact source and target families.
 
-> **Readiness statement:** v0.9.0 is a production-pilot candidate that adds enterprise tenant isolation, Microsoft Entra ID / OIDC with explicit MFA evidence enforcement, Prometheus metrics and real-time WebSocket operations telemetry on top of the v0.8 granular recovery and v0.7.1 fail-closed native-incremental core. Production acceptance on the actual hypervisors, storage, identity provider and monitoring stack is still required before go-live.
+> **Readiness statement:** v1.0.0 is a production-pilot candidate for certified cross-hypervisor recovery. The built-in certification profile supports verified VMware **export-format** recovery points to new powered-off Proxmox KVM VMs using `virt-v2v` >= 2.12.0, VirtIO disk/NIC adaptation, BIOS/UEFI handling and explicit network remapping. Native VMware VDDK/CBT layouts and XCP-ng targets are not silently guessed: they require an appropriate separately certified provider or remain blocked. Production use still requires the acceptance matrix in `docs/CERTIFIED_V2V.md` on the actual guests, hypervisors, storage and recovery networks.
 
-## v0.9 — Enterprise Operations & Ecosystem
+## v1.0 — Certified Enterprise DR & Seamless V2V
 
-### Multi-tenant / multi-site authorization
+### Built-in certified path: VMware -> Proxmox
 
-- Each hypervisor platform belongs to exactly one configured tenant.
-- Overlapping or unassigned tenant patterns fail configuration validation.
-- Portal VM/recovery-point views are tenant-scoped.
-- FLR sessions are tenant-scoped through the recovery point that created them.
-- Restore requests, approval and execution are tenant-scoped.
-- Cross-tenant restore targets are rejected.
-- WebSocket operations telemetry is filtered to the authenticated tenant scopes.
-- Full audit/system-health endpoints require a global admin (`admin` + `*` tenant scope).
+The built-in v1.0 path accepts an immutable, verified VMware OVF/export-style recovery point and converts it into a **new Proxmox QEMU/KVM VM**. It never modifies the source VM and never overwrites an existing target VM.
 
-### OIDC / Microsoft Entra ID
+Pipeline:
 
-v0.9 provides a native authorization-code + PKCE OIDC flow using the appliance's existing Python/OpenSSL runtime. Use a **tenant-specific Entra v2.0 issuer** and exact callback URI.
+1. Re-evaluate V2V policy at restore request and again at execution.
+2. Require a verified recovery point and reject suspicious points by default.
+3. Require an attested VMware export transport; native CBT/VDDK layouts are not mislabeled as OVF.
+4. Restore the encrypted recovery point to isolated staging.
+5. Verify the recovery-point SHA-256 manifest before conversion.
+6. Reject unsafe OVF file references and symlinked source content.
+7. Inspect the guest with `virt-v2v-inspector`.
+8. Enforce the certified guest architecture/firmware/disk limits.
+9. Convert with `virt-v2v` into sparse qcow2 output.
+10. Validate converted images with `qemu-img`.
+11. Create a new Proxmox VM with preserved CPU/RAM intent.
+12. Attach converted disks on VirtIO buses.
+13. Preserve BIOS as SeaBIOS or UEFI as OVMF/q35.
+14. Map each NIC to an explicitly configured Proxmox bridge and preserve MAC where available.
+15. Validate the resulting Proxmox configuration.
+16. Leave the converted VM **powered off** for isolated boot/application acceptance.
 
-The portal validates:
+Built-in certification ID:
 
-- signed login state;
-- PKCE verifier;
-- RS256 JWT signature and JWKS `kid`;
-- exact discovery issuer;
-- audience/client ID;
-- token time bounds;
-- OIDC nonce;
-- optional Entra directory tenant allowlist;
-- MFA evidence (`amr` containing `mfa`/`ngcmfa`) or explicitly configured Authentication Context IDs (`acrs`).
+```text
+immutavault-vmware-proxmox-v1
+```
 
-A valid Entra login without the configured MFA evidence fails closed when `require_mfa: true`.
+### Source-format guardrail
 
-Role and tenant mapping support both Entra group object IDs and app-role claims. This enables patterns such as an `approver` for Campus A who cannot view or approve Campus B recovery operations.
+The built-in VMware -> Proxmox path is certified for VMware export-style points produced by transports such as:
 
-### Prometheus / Grafana / Datadog / PagerDuty
+```text
+hot-clone-export
+snapshot-clone-export
+hot
+export
+cold-export
+```
 
-`/metrics` exposes OpenMetrics-compatible low-cardinality telemetry including:
+A native `vddk`, `vddk-cbt`, `cbt`, or `auto` point is a valid Immutavault recovery point, but it is **not automatically an OVF**. v1.0 refuses to guess. Use a separately certified provider that understands the native layout or maintain an export-format point for cross-hypervisor DR.
 
-- RPO compliance;
-- latest successful backup age;
-- successful/failed backup-job counters;
-- total/verified/suspicious recovery points;
-- immutable-copy status and verification;
-- restore-request states;
-- DR run results;
-- tamper-evident audit-chain validity.
+### Windows VirtIO injection
 
-Prometheus labels tenant/platform/status/target but deliberately **do not include VM names or guest file paths**. Grafana can use Prometheus directly; Datadog Agent can use its OpenMetrics integration; PagerDuty is best connected through Prometheus Alertmanager. Example alert rules are in `ops/prometheus/immutavault-alerts.yml`.
+For Windows guests, the conversion host must provide signed VirtIO drivers through `VIRTIO_WIN` or the normal `/usr/share/virtio-win` installation. If the driver source is unavailable, Windows V2V fails before target creation.
 
-### Real-time WebSocket operations
+### BIOS / UEFI
 
-The enterprise portal can start a dedicated RFC 6455 WebSocket listener. The browser first obtains a short-lived HMAC-signed ticket from the authenticated HTTPS session; long-lived portal credentials aren't placed in the WebSocket URL.
+- Legacy BIOS guests are created with SeaBIOS.
+- UEFI guests are created with OVMF/q35 and a new target EFI disk.
+- Source Secure Boot is blocked by default because v1.0 does not claim to migrate the source firmware trust state.
+- Source vTPM is blocked; Immutavault does not fabricate or silently discard TPM-protected state.
 
-The live stream provides tenant-filtered recent/running jobs and recovery summary data. Running percentages are explicitly marked as **estimates** because the supported hypervisors don't expose one common progress API. A job reaches successful 100% only when the authoritative state database records success.
+### NIC remapping
 
-See `docs/ENTERPRISE_OPERATIONS.md` and `config/enterprise-v0.9.example.yml`.
+Each target NIC is attached to a Proxmox bridge selected from the target policy:
 
-## Existing protection capabilities retained in v0.9
+```yaml
+options:
+  v2v_storage: local-lvm
+  v2v_efi_storage: local-lvm
+  v2v_default_bridge: vmbr0
+  v2v_network_map:
+    "VM Network": vmbr0
+    "Servers": vmbr20
+    "Database": vmbr30
+```
 
-- **Granular file-level recovery:** read-only restic FUSE + libguestfs browsing/downloads without full VM import first.
-- Application-consistency metadata in the immutable recovery payload and catalog.
-- `application_consistency_strict: true` for VMware protection.
-- VMware native VDDK/CBT through an externally installed authorized helper.
-- `incremental_strict: true` with `incremental_fallback: false` for fail-closed enterprise native incremental protection.
-- Explicit `hot-clone-export` full VMware backup path.
-- Proxmox online `vzdump --mode snapshot`, `qmrestore` / `pct restore` safety guards.
-- XCP-ng snapshot/XVA backup and recovery path.
-- Encrypted deduplicated restic repositories.
-- Authenticated TLS append-only repository writer endpoint.
-- GFS retention with protected immutable windows.
-- SHA-256 manifest verification and staged recovery-point verification.
-- Backup-churn anomaly detection and suspicious-point preservation.
-- Tamper-evident SHA-256 audit chain.
-- Four-eyes restore approval.
-- S3-compatible replicas and provider immutability support where available.
-- Cloudflare R2 Bucket Lock kept distinct from S3 Object Lock.
-- NFS/SMB/filesystem replicas.
-- Online SQLite control-plane backups.
-- Versioned atomic application upgrades/rollback.
-- Multi-site DR orchestration, fencing, VXLAN recovery networks and FRR/OSPF ownership controls.
-- Cross-hypervisor automatic conversion blocked until separately certified.
+With `require_network_mapping: true`, missing mappings fail closed. For DR acceptance, map converted VMs to an isolated recovery VLAN/bridge before any production cutover.
 
-## VMware strict native incremental example
+### XCP-ng and other conversion pairs
+
+Upstream `virt-v2v` targets QEMU/KVM, so Immutavault does **not** pretend that its built-in KVM pipeline is an XCP-ng converter. VMware -> XCP-ng, Proxmox -> XCP-ng and other non-built-in pairs remain blocked unless an administrator configures a separately tested provider.
+
+External providers are executable files pinned by exact SHA-256 and a `certification_id`. Protocol v1 requires the provider to advertise `inspect`, `convert`, `validate`, and `rollback`, and a successful conversion must explicitly attest:
+
+```text
+source_read_only=true
+target_new_vm=true
+network_mapped=true
+rollback_available=true
+```
+
+A binary hash change, provider crash, malformed JSON, mismatched certification ID, unadvertised pair or incomplete validation fails closed.
+
+## V2V policy example
+
+V2V remains disabled after upgrade:
+
+```yaml
+v2v:
+  enabled: false
+  builtin_vmware_to_proxmox: true
+  require_verified_point: true
+  allow_suspicious_points: false
+  virt_v2v_min_version: "2.12.0"
+  max_disks: 16
+  max_virtual_bytes: 70368744177664
+  require_network_mapping: true
+  allow_uefi: true
+  allow_secure_boot: false
+  provider_timeout_seconds: 14400
+  providers: []
+```
+
+Start from `config/enterprise-v1.0.example.yml` and enable V2V only after the isolated acceptance matrix has passed.
+
+## V2V preflight and planning
+
+```bash
+./scripts/check_v2v.sh 2.12.0
+immutavault --config /etc/immutavault/immutavault.yml v2v-doctor
+immutavault --config /etc/immutavault/immutavault.yml v2v-plan \
+  --snapshot SNAPSHOT_ID \
+  --target-platform pve-dr
+```
+
+A valid plan reports `allowed: true` with its certification ID. Unverified/suspicious points, native VDDK layouts for the built-in OVF path, unknown target pairs, missing target storage or unsupported provider state report `allowed: false` with the reason.
+
+## v0.9 enterprise operations retained
+
+v1.0 keeps the v0.9 enterprise control plane:
+
+- tenant ownership for every hypervisor platform;
+- tenant-scoped VM, recovery-point, FLR and restore authorization;
+- Microsoft Entra ID / generic OIDC authorization-code login with PKCE;
+- explicit MFA-evidence enforcement;
+- group/app-role RBAC and tenant mappings;
+- Prometheus/OpenMetrics-compatible metrics;
+- short-lived-ticket WebSocket operations telemetry;
+- Grafana, Datadog and PagerDuty integration patterns;
+- full audit/system-health endpoints restricted to global administrators.
+
+Cross-hypervisor V2V remains subject to the same tenant boundary. Cross-tenant conversion is prohibited.
+
+## v0.8 granular recovery retained
+
+- Read-only file-level recovery through restic FUSE + libguestfs.
+- Owner-scoped, short-lived FLR sessions.
+- Path traversal and symlink protections.
+- Single-file downloads without full VM import.
+- Application-consistency metadata stored with recovery points.
+
+## VMware strict native incremental protection retained
 
 Broadcom VDDK is **not bundled** or redistributed. Install an authorized compatible `immutavault-vddk` helper separately.
 
@@ -111,108 +176,42 @@ platforms:
       vddk_transport_order: [san, hotadd, nbdssl]
 ```
 
-Strict mode means helper absence, unsafe CBT state, malformed provider output, invalid checkpoints or unexpected provider exceptions fail the backup. The system doesn't silently create a hot-clone recovery point and call it incremental.
+`incremental_strict: true` prevents automatic hot-clone fallback, fake incremental recovery points and unsafe CBT checkpoint advancement after ambiguous provider state.
 
-## Enterprise identity + tenancy example
+## Immutable recovery and DR capabilities
 
-```yaml
-tenants:
-  - id: campus-a
-    name: Campus A
-    platforms: [vc-campus-a, pve-campus-a]
-  - id: campus-b
-    name: Campus B
-    platforms: [vc-campus-b]
-
-identity:
-  oidc:
-    enabled: true
-    issuer: https://login.microsoftonline.com/<TENANT-ID>/v2.0
-    client_id: <APP-CLIENT-ID>
-    client_secret_env: IMMUTAVAULT_ENTRA_CLIENT_SECRET
-    redirect_uri: https://backup.example.com/auth/callback
-    require_mfa: true
-    allow_local_tokens: false
-    group_role_map:
-      "<admin-group-object-id>": admin
-      "<approver-group-object-id>": approver
-      "<operator-group-object-id>": restore_operator
-    group_tenant_map:
-      "<campus-a-group-object-id>": [campus-a]
-      "<campus-b-group-object-id>": [campus-b]
-```
-
-Use Microsoft Entra Conditional Access / authentication strength as the primary MFA policy. The Immutavault claim check is an additional fail-closed application gate.
-
-## Observability example
-
-```yaml
-observability:
-  metrics_enabled: true
-  metrics_path: /metrics
-  metrics_token_env: IMMUTAVAULT_METRICS_TOKEN
-  include_platform_labels: true
-
-  websocket_enabled: true
-  websocket_listen: 0.0.0.0
-  websocket_port: 8788
-  websocket_public_url: wss://backup.example.com:8788
-  websocket_poll_seconds: 2
-  websocket_ticket_ttl_seconds: 60
-  websocket_allowed_origins:
-    - https://backup.example.com
-```
-
-The installer generates `IMMUTAVAULT_OIDC_SESSION_SECRET` and `IMMUTAVAULT_METRICS_TOKEN` for new controllers and adds them non-destructively during upgrades. Entra client secrets are never generated by Immutavault; place the real app-registration secret in the configured environment variable.
-
-## Recommended topology
-
-```text
-                     Microsoft Entra ID
-                         OIDC + MFA
-                             |
-                             v
- +----------------+   HTTPS portal/API   +----------------------+
- | NOC / SOC      |--------------------->| Immutavault control  |
- | Grafana        |<--- Prometheus ------| plane / portal       |
- | Datadog        |<--- /metrics --------| + WebSocket ops      |
- +----------------+                      +----------+-----------+
-          |                                         |
-          | Alertmanager -> PagerDuty               | append-only backup
-          |                                         v
-          |                              +----------------------+
-          |                              | Primary vault        |
-          |                              | rest-server + repo   |
-          |                              +----------+-----------+
-          |                                         |
-          |                       immutable replica / DR copy
-          |                                         v
-          |                              +----------------------+
-          +----------------------------->| DR / object / NAS    |
-                                         +----------------------+
-```
-
-Keep control plane, primary repository and additional immutable copy in separate failure domains when possible.
+- VMware/vCenter, Proxmox VE and XCP-ng protection adapters.
+- Encrypted, deduplicated restic repository.
+- Authenticated TLS append-only repository writer path.
+- Separate controller/repository identities.
+- GFS retention with protected immutable windows.
+- SHA-256 manifest verification and staged recovery-point verification.
+- Backup-churn/ransomware anomaly detection with suspicious-point preservation.
+- Tamper-evident SHA-256 audit chain.
+- Four-eyes restore approval.
+- S3-compatible replicas and provider immutability where supported.
+- Cloudflare R2 Bucket Lock kept distinct from S3 Object Lock.
+- NFS/SMB/filesystem replicas.
+- Online SQLite control-plane backups.
+- Versioned atomic application upgrade/rollback.
+- Multi-site DR orchestration, fencing, VXLAN recovery networks and FRR/OSPF ownership controls.
+- Certified V2V restore auditing with source snapshot, conversion profile and validation metadata.
 
 ## Fast install on Ubuntu 24.04 LTS
 
 ```bash
 git clone https://github.com/bnrohit/immutavault.git
 cd immutavault
-git checkout v0.9.0
+git checkout v1.0.0
 sudo ./scripts/preflight.sh
 ./scripts/release_check.sh
 sudo ./scripts/install.sh --role all --repo-root /srv/immutavault
 sudo ./scripts/launch_setup_console.sh
 ```
 
-For enterprise configuration, start from:
+The base installer includes libguestfs/qemu tooling used by FLR, but it does not claim that every distribution package provides the certified `virt-v2v` version. Install/lifecycle-manage a supported `virt-v2v` >= 2.12.0 build and pass `check_v2v.sh` before enabling built-in V2V.
 
-```text
-config/enterprise-v0.9.example.yml
-```
-
-Do not enable recurring production schedules until `doctor`, inventory, dry-run, a real backup, recovery-point verification, FLR and an isolated full-VM restore all pass.
+Do not enable recurring production schedules or cross-hypervisor promotion until `doctor`, inventory, dry-run, a real backup, recovery-point verification, FLR, same-family restore and the applicable V2V acceptance tests all pass.
 
 ## Core commands
 
@@ -223,33 +222,57 @@ immutavault --config /etc/immutavault/immutavault.yml inventory
 immutavault --config /etc/immutavault/immutavault.yml backup --all --dry-run
 immutavault --config /etc/immutavault/immutavault.yml backup --all
 immutavault --config /etc/immutavault/immutavault.yml recovery-points
+immutavault --config /etc/immutavault/immutavault.yml v2v-doctor
+immutavault --config /etc/immutavault/immutavault.yml v2v-plan --snapshot SNAPSHOT --target-platform TARGET
 immutavault --config /etc/immutavault/immutavault.yml portal
 ```
 
+## Production V2V acceptance
+
+A successful conversion is **not** automatically a production-ready recovery. The converted target intentionally stays powered off. Before production promotion:
+
+1. Boot it on an isolated recovery network.
+2. Confirm OS boot and storage visibility.
+3. Validate VirtIO/storage/network drivers.
+4. Verify NIC/VLAN mapping and MAC behavior.
+5. Validate filesystem/application/database consistency.
+6. Test reboot and clean shutdown.
+7. Validate monitoring, backup agent/application dependencies and security controls.
+8. Prove rollback by deleting/quarantining the new target without touching the immutable source.
+9. Fence/isolate the original production workload before assigning production IP/routing ownership.
+10. Record the source snapshot, tool versions, certification ID and acceptance evidence under change control.
+
+See `docs/CERTIFIED_V2V.md` for the full guest/firmware/storage/network matrix.
+
 ## Important boundaries
 
-- Native VMware VDDK/CBT requires a separately authorized provider/helper; Broadcom VDDK is not bundled.
-- VDDK/CBT is incremental backup, not CDP. RPO is bounded by schedule and successful completion.
-- Current Proxmox and XCP-ng paths are snapshot/export based, not PBS/XO native incrementals.
+- Built-in v1.0 V2V is VMware **export-format** -> Proxmox KVM; it is not a universal converter.
+- Native VMware VDDK/CBT layouts need a suitable certified provider or an export-format point for built-in V2V.
+- XCP-ng conversion targets require a separately certified provider.
+- Source Secure Boot is blocked by default; source vTPM is blocked.
+- Built-in guest architecture is x86_64/amd64.
+- Windows V2V requires signed VirtIO driver media/tree.
+- Automatic target overwrite and automatic post-conversion power-on are prohibited.
+- Cross-tenant V2V is prohibited.
+- Conversion does not replace DR fencing, routing ownership, application validation or change control.
+- VDDK/CBT is incremental backup, not CDP; RPO still depends on schedule and successful runs.
 - Application consistency depends on guest/application quiescing and must be tested per workload.
-- WebSocket running percentages are metadata-based estimates until job completion.
-- Prometheus is a monitoring surface, not a restore-control surface.
-- Entra/OIDC MFA evidence validation doesn't replace Conditional Access.
-- Multi-tenant Immutavault partitions authorization by configured platform ownership; it doesn't make one shared repository cryptographically unique per tenant.
-- Cross-hypervisor automatic conversion remains blocked in the safe core.
+- Prometheus is monitoring, not a restore-control surface.
+- Entra/OIDC MFA evidence checks do not replace Conditional Access.
 - Automatic DR is not enabled by installation.
 
 ## Documentation
 
-- `docs/ENTERPRISE_OPERATIONS.md` — v0.9 tenancy, Entra/OIDC, Prometheus, WebSockets, Grafana, Datadog and PagerDuty
-- `docs/FILE_LEVEL_RECOVERY.md` — v0.8 granular read-only recovery
+- `docs/CERTIFIED_V2V.md` — v1.0 conversion matrix, provider protocol and acceptance procedure
+- `docs/ENTERPRISE_OPERATIONS.md` — v0.9 tenancy, Entra/OIDC, Prometheus, WebSockets and NOC/SOC integrations
+- `docs/FILE_LEVEL_RECOVERY.md` — granular read-only file recovery
 - `docs/VMWARE_BACKUP.md` — VDDK/CBT, application consistency and fallback policy
-- `docs/INCREMENTAL_STRICT_MODE.md` — fail-closed v0.7.1 native incremental policy
-- `docs/PRODUCTION_ACCEPTANCE.md` — go-live gates
+- `docs/INCREMENTAL_STRICT_MODE.md` — fail-closed native incremental policy
+- `docs/PRODUCTION_ACCEPTANCE.md` — general go-live gates
 - `docs/INSTALLATION.md` — installation
 - `docs/OPERATIONS.md` — day-2 operations
 - `docs/RESTORE.md` — restore runbook
-- `docs/DR_RUNBOOK.md` — failover/failback
+- `docs/DR_RUNBOOK.md` — failover/failback and fencing
 - `docs/HIGH_AVAILABILITY.md` — HA design
 - `docs/SECURITY.md` — security model
 - `docs/ARCHITECTURE.md` — components and trust boundaries
