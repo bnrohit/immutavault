@@ -29,45 +29,80 @@ incremental_example = Path('config/vmware-incremental.example.yml').read_text()
 flr_doc = Path('docs/FILE_LEVEL_RECOVERY.md').read_text()
 flr_code = Path('src/immutavault/flr.py').read_text()
 config_example = Path('config/immutavault.example.yml').read_text()
+v2v_doc = Path('docs/CERTIFIED_V2V.md').read_text()
+v2v_config = Path('config/enterprise-v1.0.example.yml').read_text()
+v2v_code = Path('src/immutavault/v2v.py').read_text()
+v2v_cert = Path('src/immutavault/v2v_cert.py').read_text()
+v2v_engine = Path('src/immutavault/v2v_engine.py').read_text()
+v2v_cli = Path('src/immutavault/cli_v10.py').read_text()
 
 assert f'__version__ = "{version}"' in init
 assert re.search(r'^version = "' + re.escape(version) + r'"$', pyproject, re.M)
+assert 'immutavault = "immutavault.cli_v10:main"' in pyproject, 'v1.0 console script does not use certified V2V entry point'
 
-# Release-facing operator documentation must never lag VERSION again. A stale
-# README can send an operator to an older tag or to the wrong VMware transport.
+# Release-facing operator documentation must never lag VERSION.
 assert readme.startswith(f'# Immutavault v{version}\n'), 'README release heading is stale'
 assert f'git checkout v{version}' in readme, 'README install command is not pinned to current VERSION'
 assert 'incremental_strict: true' in readme
 assert 'incremental_fallback: false' in readme
 assert 'Broadcom VDDK' in readme and 'not bundled' in readme.lower()
+assert 'file-level recovery' in readme.lower(), 'README does not expose FLR'
+assert 'application_consistency_strict: true' in readme, 'README omits strict application-consistency policy'
+assert 'immutavault-vmware-proxmox-v1' in readme, 'README omits built-in V2V certification id'
+assert 'powered off' in readme.lower(), 'README must state that converted VMs remain powered off'
+assert 'XCP-ng' in readme and 'certified provider' in readme, 'README must preserve XCP-ng provider boundary'
 
-# The canonical VMware runbook and example must preserve the strict production
-# contract introduced in v0.7.1.
-for token in (
-    'incremental_strict: true',
-    'incremental_fallback: false',
-    'fail closed',
-    'fallback_safe',
-):
+# Preserve the v0.7.1 strict VMware contract.
+for token in ('incremental_strict: true', 'incremental_fallback: false', 'fail closed', 'fallback_safe'):
     assert token in vmware_doc, f'VMware runbook missing required policy token: {token}'
-assert 'mode: "vddk"' in incremental_example, 'VMware example is not pinned to native vddk mode'
+assert 'mode: "vddk"' in incremental_example
 assert 'incremental_strict: true' in incremental_example
 assert 'incremental_fallback: false' in incremental_example
 assert 'application_consistency_strict: true' in incremental_example
+
+# Preserve the v0.8 FLR safety contract.
 assert 'flr:' in config_example and 'mount_root: "/srv/immutavault/flr"' in config_example
 for token in ('restic mount', 'guestmount --ro', 'path traversal', 'symlink'):
     assert token in flr_doc, f'FLR runbook missing safety token: {token}'
 for token in ('--no-lock', 'guestmount', 'does not follow guest symlinks', 'max_download_bytes'):
     assert token in flr_code, f'FLR implementation missing required safety token: {token}'
-assert 'file-level recovery' in readme.lower(), 'README does not expose v0.8 FLR'
-assert 'application_consistency_strict: true' in readme, 'README omits strict application-consistency policy'
+
+# v1.0 certified V2V is opt-in and fail-closed. The release may never silently
+# broaden this matrix without updating the contract/tests/docs together.
+for token in (
+    'v2v:\n  enabled: false',
+    'require_verified_point: true',
+    'allow_suspicious_points: false',
+    'allow_secure_boot: false',
+    'virt_v2v_min_version: "2.12.0"',
+    'v2v_network_map:',
+):
+    assert token in v2v_config, f'v1.0 example missing V2V safety token: {token}'
+for token in (
+    'VMware/vCenter -> Proxmox VE',
+    'Native VMware VDDK/CBT layout',
+    'powered off',
+    'vTPM',
+    'Secure Boot',
+    'SHA-256-pinned',
+    'VMware/Proxmox -> XCP-ng',
+    'isolated recovery network',
+):
+    assert token in v2v_doc, f'certified V2V runbook missing safety token: {token}'
+for token in (
+    'input:ova', 'output:local', 'convert:linux', 'convert:windows',
+    'source_read_only', 'target_new_vm', 'network_mapped', 'rollback_available',
+    'qm importdisk', 'automatic_power_on',
+):
+    assert token in v2v_code, f'V2V implementation missing required contract token: {token}'
+assert 'OVF_EXPORT_TRANSPORTS' in v2v_cert and 'NATIVE_INCREMENTAL_TRANSPORTS' in v2v_cert
+assert 'cross-hypervisor recovery blocked at execution' in v2v_engine
+assert 'v2v-doctor' in v2v_cli and 'v2v-plan' in v2v_cli
 print(version)
 PY
 pass "version/release documentation consistent: $VERSION"
 
 # Never ship runtime secrets, TLS private keys, catalogs, or backup payloads.
-# `git archive` source packages intentionally have no .git directory, so support both
-# a normal clone and the release tarball used for offline validation.
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   FILE_LIST=$(git ls-files)
 else
@@ -85,24 +120,28 @@ for f in scripts/*.sh; do bash -n "$f"; done
 pass 'shell scripts parse'
 
 pytest -q
-pass 'unit/security/DR suite passed'
+pass 'unit/security/DR/V2V suite passed'
 
 PYTHONPATH=src python3 - <<'PY'
 from immutavault.config import load_config
+from immutavault.v2v_config import load_v10_config
 cfg = load_config('config/immutavault.example.yml')
 assert cfg.runtime.command_timeout_seconds > 0
 assert cfg.repository.retention.keep_within_days >= 1
+v10 = load_v10_config('config/enterprise-v1.0.example.yml')
+assert v10.v2v.enabled is False
+assert v10.v2v.require_verified_point is True
 print('config valid')
 PY
-pass 'example configuration validates'
+pass 'example configurations validate'
 
-PYTHONPATH=src python3 -m immutavault.cli --help >/dev/null
-pass 'source-tree CLI smoke test'
+PYTHONPATH=src python3 -m immutavault.cli_v10 --help >/dev/null
+PYTHONPATH=src python3 -m immutavault.cli_v10 v2v-plan --help >/dev/null
+pass 'v1.0 source-tree CLI smoke test'
 
 if command -v systemd-analyze >/dev/null 2>&1; then
   mkdir -p "$TMP/systemd"
   cp systemd/* "$TMP/systemd/"
-  # Verify unit grammar independently of whether this CI/sandbox has the real binaries installed.
   sed -i 's#/usr/local/bin/immutavault#/bin/true#g; s#/usr/bin/env rest-server#/bin/true#g' "$TMP"/systemd/*.service
   if ! systemd-analyze verify "$TMP"/systemd/*.service "$TMP"/systemd/*.timer >"$TMP/systemd.out" 2>&1; then
     cat "$TMP/systemd.out" >&2
@@ -112,10 +151,6 @@ if command -v systemd-analyze >/dev/null 2>&1; then
 fi
 
 rm -rf build dist src/*.egg-info
-# Prefer an offline build when the active interpreter already has the declared
-# setuptools backend. Fresh CI runners may not, even after an editable install
-# that used an isolated build environment, so fall back to normal PEP 517 build
-# isolation instead of reporting a false release failure.
 if python3 -c 'import setuptools.build_meta' >/dev/null 2>&1; then
   python3 -m pip wheel . --no-deps --no-build-isolation -w dist >/dev/null
 else
@@ -130,14 +165,16 @@ python3 -m pip install --no-deps --target "$TMP/site" "$WHEEL" >/dev/null
 PYTHONPATH="$TMP/site" python3 - <<PY
 import immutavault
 from immutavault.config import load_config
+from immutavault.v2v_config import load_v10_config
 assert immutavault.__version__ == '$VERSION'
 load_config('config/immutavault.example.yml')
+v10 = load_v10_config('config/enterprise-v1.0.example.yml')
+assert v10.v2v.enabled is False
 print(immutavault.__version__)
 PY
-pass 'built wheel imports and loads production configuration'
+pass 'built wheel imports and loads production/v1.0 configuration'
 
-# Static install contract: the all-in-one role must install verified data-plane
-# binaries or fail closed.
+# Static install/data-plane contracts.
 grep -q './scripts/install_restic.sh' scripts/install.sh || fail 'all-in-one installer lacks verified restic path'
 grep -q 'sha256sum --check --status' scripts/install_restic.sh || fail 'restic installer lacks checksum verification'
 grep -q 'check_restic.sh' scripts/preflight.sh || fail 'preflight lacks restic compatibility gate'
@@ -148,11 +185,15 @@ grep -q -- '--append-only' scripts/check_rest_server.sh || fail 'rest-server com
 grep -q -- '--tls-min-ver' scripts/check_rest_server.sh || fail 'rest-server compatibility gate lacks hardened TLS check'
 ! grep -q 'does NOT download rest-server binaries' scripts/install_appliance.sh || fail 'appliance documentation still contains obsolete rest-server download statement'
 grep -q 'EnvironmentFile=/etc/immutavault/repository.env' systemd/immutavault-rest-server.service || fail 'rest-server still receives controller environment'
-grep -q 'libguestfs-tools' scripts/install_appliance.sh || fail 'appliance installer lacks FLR libguestfs dependency'
+grep -q 'libguestfs-tools' scripts/install_appliance.sh || fail 'appliance installer lacks FLR/libguestfs dependency'
 grep -q 'fuse3' scripts/install_appliance.sh || fail 'appliance installer lacks FUSE3 dependency'
 grep -q 'guestmount' scripts/check_flr.sh || fail 'FLR prerequisite checker is missing guestmount gate'
 grep -q 'NoNewPrivileges=false' systemd/immutavault-portal.service || fail 'portal service cannot use packaged FUSE mount helper'
-pass 'restic/rest-server installs are pinned, checksummed, capability-gated, and privilege-separated'
-pass 'FLR FUSE/libguestfs installation contract is present'
+grep -q 'virt-v2v --machine-readable' scripts/check_v2v.sh || fail 'V2V capability checker lacks machine-readable probe'
+grep -q 'input:ova' scripts/check_v2v.sh || fail 'V2V capability checker lacks OVA input gate'
+grep -q 'output:local' scripts/check_v2v.sh || fail 'V2V capability checker lacks local output gate'
+pass 'restic/rest-server installs are pinned, checksummed and capability-gated'
+pass 'FLR installation contract is present'
+pass 'V2V conversion capability gate is present'
 
 printf '\nALL RELEASE CHECKS PASSED for Immutavault %s\n' "$VERSION"
