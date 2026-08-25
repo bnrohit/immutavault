@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import re
 import shlex
 from typing import Any
 import xml.etree.ElementTree as ET
@@ -126,7 +125,13 @@ class CertifiedV2VManager(V2VManager):
             raise RuntimeError("source NIC network identity is unavailable; refusing to guess target bridge mapping")
         return bundle
 
-    def _proxmox_storage_ids(self, target: PlatformConfig, options: dict[str, Any]) -> tuple[str, ...]:
+    def _proxmox_storage_ids(
+        self,
+        target: PlatformConfig,
+        options: dict[str, Any],
+        *,
+        include_efi: bool,
+    ) -> tuple[str, ...]:
         storage = str(
             options.get("storage")
             or target.options.get("v2v_storage")
@@ -136,22 +141,28 @@ class CertifiedV2VManager(V2VManager):
         if not storage or not STORAGE_RE.fullmatch(storage):
             raise RuntimeError("Proxmox V2V target storage is missing or invalid")
         values = [storage]
-        efi_storage = str(options.get("efi_storage") or target.options.get("v2v_efi_storage") or storage).strip()
-        if efi_storage:
-            if not STORAGE_RE.fullmatch(efi_storage):
-                raise RuntimeError("Proxmox V2V EFI storage id is invalid")
+        if include_efi:
+            efi_storage = str(options.get("efi_storage") or target.options.get("v2v_efi_storage") or storage).strip()
+            if not efi_storage or not STORAGE_RE.fullmatch(efi_storage):
+                raise RuntimeError("UEFI V2V requires a valid Proxmox EFI storage id")
             if efi_storage not in values:
                 values.append(efi_storage)
         return tuple(values)
 
-    def _preflight_proxmox_storage(self, target: PlatformConfig, options: dict[str, Any]) -> None:
-        """Fail before conversion when the target image storage is unavailable.
+    def _preflight_proxmox_storage(
+        self,
+        target: PlatformConfig,
+        options: dict[str, Any],
+        *,
+        include_efi: bool = True,
+    ) -> None:
+        """Fail before conversion when required target image storage is unavailable.
 
         `pvesm status --content images --enabled 1` is authoritative for whether
         a configured Proxmox storage can currently accept QEMU VM images.
         """
         adapter = ProxmoxAdapter(target, self.cfg.runtime.command_timeout_seconds)
-        for storage in self._proxmox_storage_ids(target, options):
+        for storage in self._proxmox_storage_ids(target, options, include_efi=include_efi):
             command = (
                 "pvesm status --storage " + shlex.quote(storage)
                 + " --content images --enabled 1"
@@ -196,7 +207,7 @@ class CertifiedV2VManager(V2VManager):
         if not dry_run:
             # Storage was checked before conversion; repeat it immediately before
             # target creation and validate every mapped bridge to close the race.
-            self._preflight_proxmox_storage(target, options)
+            self._preflight_proxmox_storage(target, options, include_efi=bundle.firmware == "uefi")
             self._preflight_proxmox_bridges(bundle, target, options)
         return super()._restore_proxmox(bundle, target, target_name, options, dry_run=dry_run)
 
@@ -212,10 +223,11 @@ class CertifiedV2VManager(V2VManager):
     ) -> dict[str, Any]:
         plan = self.plan(point, target, options)
         if plan.allowed and plan.mode == "builtin" and self._pair(str(point.get("platform_type") or ""), target.type) == BUILTIN_PAIR:
-            # A read-only target storage check happens before a potentially long
-            # virt-v2v conversion so an offline/disabled datastore fails fast.
+            # Before guest inspection we do not know whether EFI storage is
+            # required. Validate primary image storage now; EFI is checked after
+            # firmware attestation and immediately before target creation.
             if not dry_run:
-                self._preflight_proxmox_storage(target, options)
+                self._preflight_proxmox_storage(target, options, include_efi=False)
         return super().execute(
             source=source,
             point=point,
