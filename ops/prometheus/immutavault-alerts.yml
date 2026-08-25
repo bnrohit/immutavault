@@ -1,0 +1,54 @@
+groups:
+  - name: immutavault-security
+    rules:
+      - alert: ImmutavaultAuditChainInvalid
+        expr: immutavault_audit_chain_valid != 1
+        for: 1m
+        labels:
+          severity: critical
+          team: backup-security
+        annotations:
+          summary: "Immutavault audit chain validation failed"
+          description: "The tamper-evident audit chain is invalid. Treat this as a security incident until investigated."
+
+      - alert: ImmutavaultSuspiciousRecoveryPoint
+        expr: immutavault_recovery_points_suspicious > 0
+        for: 5m
+        labels:
+          severity: warning
+          team: backup-security
+        annotations:
+          summary: "Suspicious recovery point detected for {{ $labels.tenant }} / {{ $labels.platform }}"
+          description: "Immutavault anomaly detection is preserving one or more suspicious recovery points."
+
+  - name: immutavault-operations
+    rules:
+      - alert: ImmutavaultRPOBreach
+        expr: immutavault_rpo_compliant == 0
+        for: 10m
+        labels:
+          severity: critical
+          team: backup-operations
+        annotations:
+          summary: "Backup RPO breach for {{ $labels.tenant }} / {{ $labels.platform }}"
+          description: "The newest successful backup is older than the configured Immutavault RPO target."
+
+      - alert: ImmutavaultBackupFailure
+        expr: increase(immutavault_backup_jobs_total{status="failed"}[15m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+          team: backup-operations
+        annotations:
+          summary: "Backup failure for {{ $labels.tenant }} / {{ $labels.platform }}"
+          description: "One or more Immutavault backup jobs failed in the last 15 minutes."
+
+      - alert: ImmutavaultImmutableCopyNotVerified
+        expr: sum by (tenant, target) (immutavault_recovery_copies{status="success"}) - sum by (tenant, target) (immutavault_recovery_copies_verified{status="success"}) > 0
+        for: 30m
+        labels:
+          severity: warning
+          team: backup-operations
+        annotations:
+          summary: "Unverified recovery copies for {{ $labels.tenant }} on {{ $labels.target }}"
+          description: "Successful recovery copies exist that have not yet been marked verified."
