@@ -127,6 +127,9 @@ if [[ $ENABLE -eq 1 ]]; then
     systemctl enable --now immutavault-rest-server.service
   fi
   if [[ "$ROLE" == all || "$ROLE" == controller ]]; then
+    # FLR mount privilege lives in the local broker. Start it before the network
+    # portal so the portal can remain NoNewPrivileges=true/PrivateDevices=true.
+    systemctl enable --now immutavault-flr.service
     systemctl enable --now immutavault-portal.service
     systemctl enable --now immutavault-backup.timer immutavault-state-backup.timer immutavault-health.timer
   fi
