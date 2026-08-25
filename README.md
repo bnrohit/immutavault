@@ -1,10 +1,18 @@
-# Immutavault v1.0.0
+# Immutavault v1.0.1
 
 Immutavault is an open, vendor-neutral **immutable VM backup, recovery, certified V2V conversion, replication, file-level recovery and disaster-recovery orchestrator** for VMware/vCenter, Proxmox VE and XCP-ng.
 
 The security principle remains simple: **the identity that creates backups does not receive prune/delete authority.** The controller writes through an append-only repository service, retention/prune is separated, recovery creates a **new VM** by default, and v1.0 cross-hypervisor conversion stays fail-closed unless a tested conversion profile explicitly permits the exact source and target families.
 
-> **Readiness statement:** v1.0.0 is a production-pilot candidate for certified cross-hypervisor recovery. The built-in certification profile supports verified VMware **export-format** recovery points to new powered-off Proxmox KVM VMs using `virt-v2v` >= 2.12.0, VirtIO disk/NIC adaptation, BIOS/UEFI handling and explicit network remapping. Native VMware VDDK/CBT layouts and XCP-ng targets are not silently guessed: they require an appropriate separately certified provider or remain blocked. Production use still requires the acceptance matrix in `docs/CERTIFIED_V2V.md` on the actual guests, hypervisors, storage and recovery networks.
+> **Readiness statement:** v1.0.1 is a production-pilot hardening release for certified cross-hypervisor recovery. The built-in certification profile supports verified VMware **export-format** recovery points to new powered-off Proxmox KVM VMs using `virt-v2v` >= 2.12.0, VirtIO disk/NIC adaptation, BIOS/UEFI handling and explicit network remapping. v1.0.1 additionally isolates file-level recovery mount privileges behind a local FLR broker and validates Proxmox image storage/bridges before target creation. Native VMware VDDK/CBT layouts and XCP-ng targets are not silently guessed: they require an appropriate separately certified provider or remain blocked. Production use still requires the acceptance matrix in `docs/CERTIFIED_V2V.md` on the actual guests, hypervisors, storage and recovery networks.
+
+## v1.0.1 — Hardening & operational cleanup
+
+- **Privilege-separated FLR broker:** the network-facing portal no longer performs FUSE/libguestfs mounts and runs with `NoNewPrivileges=true`, `PrivateDevices=true`, and an empty capability set. A local root broker owns `/dev/fuse` access inside a private mount namespace and accepts only authenticated local Unix-socket peers.
+- **Owner-bound FLR sessions:** browse, download and close operations stay bound to the identity that created the session. The old admin close edge case is handled without restoring cross-user mounted-session access.
+- **V2V target readiness gate:** the built-in VMware -> Proxmox path checks that configured storage is enabled, active and accepts VM-image content before conversion, then rechecks storage and verifies every mapped Linux bridge before VM creation.
+- **Fail-fast DR behavior:** an offline datastore or missing recovery bridge is rejected before a target VM is created; conversion never falls through to an uncertified path.
+- **Release contract cleanup:** CI now verifies broker privilege separation, wheel entry points, systemd hardening and V2V target-readiness checks as part of the release gate.
 
 ## v1.0 — Certified Enterprise DR & Seamless V2V
 
@@ -17,19 +25,21 @@ Pipeline:
 1. Re-evaluate V2V policy at restore request and again at execution.
 2. Require a verified recovery point and reject suspicious points by default.
 3. Require an attested VMware export transport; native CBT/VDDK layouts are not mislabeled as OVF.
-4. Restore the encrypted recovery point to isolated staging.
-5. Verify the recovery-point SHA-256 manifest before conversion.
-6. Reject unsafe OVF file references and symlinked source content.
-7. Inspect the guest with `virt-v2v-inspector`.
-8. Enforce the certified guest architecture/firmware/disk limits.
-9. Convert with `virt-v2v` into sparse qcow2 output.
-10. Validate converted images with `qemu-img`.
-11. Create a new Proxmox VM with preserved CPU/RAM intent.
-12. Attach converted disks on VirtIO buses.
-13. Preserve BIOS as SeaBIOS or UEFI as OVMF/q35.
-14. Map each NIC to an explicitly configured Proxmox bridge and preserve MAC where available.
-15. Validate the resulting Proxmox configuration.
-16. Leave the converted VM **powered off** for isolated boot/application acceptance.
+4. Verify that the target Proxmox image storage is enabled and active.
+5. Restore the encrypted recovery point to isolated staging.
+6. Verify the recovery-point SHA-256 manifest before conversion.
+7. Reject unsafe OVF file references and symlinked source content.
+8. Inspect the guest with `virt-v2v-inspector`.
+9. Enforce the certified guest architecture/firmware/disk limits.
+10. Convert with `virt-v2v` into sparse qcow2 output.
+11. Validate converted images with `qemu-img`.
+12. Recheck target storage and validate every mapped Proxmox bridge.
+13. Create a new Proxmox VM with preserved CPU/RAM intent.
+14. Attach converted disks on VirtIO buses.
+15. Preserve BIOS as SeaBIOS or UEFI as OVMF/q35.
+16. Map each NIC to an explicitly configured Proxmox bridge and preserve MAC where available.
+17. Validate the resulting Proxmox configuration.
+18. Leave the converted VM **powered off** for isolated boot/application acceptance.
 
 Built-in certification ID:
 
@@ -77,7 +87,7 @@ options:
     "Database": vmbr30
 ```
 
-With `require_network_mapping: true`, missing mappings fail closed. For DR acceptance, map converted VMs to an isolated recovery VLAN/bridge before any production cutover.
+With `require_network_mapping: true`, missing mappings fail closed. v1.0.1 also verifies that every selected bridge exists on the Proxmox node before VM creation. For DR acceptance, map converted VMs to an isolated recovery VLAN/bridge before any production cutover.
 
 ### XCP-ng and other conversion pairs
 
@@ -126,7 +136,7 @@ immutavault --config /etc/immutavault/immutavault.yml v2v-plan \
   --target-platform pve-dr
 ```
 
-A valid plan reports `allowed: true` with its certification ID. Unverified/suspicious points, native VDDK layouts for the built-in OVF path, unknown target pairs, missing target storage or unsupported provider state report `allowed: false` with the reason.
+A valid plan reports `allowed: true` with its certification ID. Unverified/suspicious points, native VDDK layouts for the built-in OVF path, unknown target pairs, missing target storage or unsupported provider state report `allowed: false` with the reason. Execution additionally performs live Proxmox storage and bridge readiness checks before target creation.
 
 ## v0.9 enterprise operations retained
 
@@ -144,10 +154,13 @@ v1.0 keeps the v0.9 enterprise control plane:
 
 Cross-hypervisor V2V remains subject to the same tenant boundary. Cross-tenant conversion is prohibited.
 
-## v0.8 granular recovery retained
+## v0.8 granular recovery retained and hardened
 
 - Read-only file-level recovery through restic FUSE + libguestfs.
+- A privilege-separated **FLR broker** performs mount operations; the portal has no direct `/dev/fuse` access.
 - Owner-scoped, short-lived FLR sessions.
+- Unix-socket peer credential validation between portal and broker.
+- Private mount namespace for recovery mounts.
 - Path traversal and symlink protections.
 - Single-file downloads without full VM import.
 - Application-consistency metadata stored with recovery points.
@@ -202,7 +215,7 @@ platforms:
 ```bash
 git clone https://github.com/bnrohit/immutavault.git
 cd immutavault
-git checkout v1.0.0
+git checkout v1.0.1
 sudo ./scripts/preflight.sh
 ./scripts/release_check.sh
 sudo ./scripts/install.sh --role all --repo-root /srv/immutavault
@@ -255,6 +268,7 @@ See `docs/CERTIFIED_V2V.md` for the full guest/firmware/storage/network matrix.
 - Automatic target overwrite and automatic post-conversion power-on are prohibited.
 - Cross-tenant V2V is prohibited.
 - Conversion does not replace DR fencing, routing ownership, application validation or change control.
+- The portal is intentionally unprivileged for FLR; if `immutavault-flr.service` is unavailable, FLR fails closed instead of mounting directly in the web process.
 - VDDK/CBT is incremental backup, not CDP; RPO still depends on schedule and successful runs.
 - Application consistency depends on guest/application quiescing and must be tested per workload.
 - Prometheus is monitoring, not a restore-control surface.
@@ -263,9 +277,9 @@ See `docs/CERTIFIED_V2V.md` for the full guest/firmware/storage/network matrix.
 
 ## Documentation
 
-- `docs/CERTIFIED_V2V.md` — v1.0 conversion matrix, provider protocol and acceptance procedure
+- `docs/CERTIFIED_V2V.md` — v1.0/v1.0.1 conversion matrix, provider protocol, target readiness and acceptance procedure
 - `docs/ENTERPRISE_OPERATIONS.md` — v0.9 tenancy, Entra/OIDC, Prometheus, WebSockets and NOC/SOC integrations
-- `docs/FILE_LEVEL_RECOVERY.md` — granular read-only file recovery
+- `docs/FILE_LEVEL_RECOVERY.md` — granular read-only file recovery and v1.0.1 FLR broker security boundary
 - `docs/VMWARE_BACKUP.md` — VDDK/CBT, application consistency and fallback policy
 - `docs/INCREMENTAL_STRICT_MODE.md` — fail-closed native incremental policy
 - `docs/PRODUCTION_ACCEPTANCE.md` — general go-live gates
