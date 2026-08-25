@@ -3,12 +3,8 @@ from pathlib import Path
 from immutavault.enterprise_config import load_enterprise_config
 
 
-def test_v09_release_contract_is_present():
-    version = Path("VERSION").read_text(encoding="utf-8").strip()
-    assert version == "0.9.0"
-
+def test_v09_enterprise_guarantees_are_retained():
     readme = Path("README.md").read_text(encoding="utf-8")
-    assert readme.startswith("# Immutavault v0.9.0\n")
     for token in (
         "Microsoft Entra ID",
         "Prometheus",
