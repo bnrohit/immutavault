@@ -75,8 +75,11 @@ def broker(tmp_path):
             pass
 
 
-def _client(socket_path: str) -> FLRBrokerClient:
-    cfg = SimpleNamespace(flr=SimpleNamespace(enabled=True))
+def _client(socket_path: str, *, runtime_timeout: int = 900) -> FLRBrokerClient:
+    cfg = SimpleNamespace(
+        flr=SimpleNamespace(enabled=True),
+        runtime=SimpleNamespace(command_timeout_seconds=runtime_timeout),
+    )
     return FLRBrokerClient(cfg, socket_path=socket_path)
 
 
@@ -122,3 +125,20 @@ def test_unknown_admin_session_cannot_be_force_closed(broker):
     with pytest.raises(PermissionError, match="ownership is unknown"):
         client_b.close_session(sid, actor=None, force=True)
     assert sid in manager.owners
+
+
+def test_broker_rejects_missing_authenticated_actor(broker):
+    _manager, socket_path = broker
+    client = _client(socket_path)
+    with pytest.raises(PermissionError, match="authenticated actor"):
+        client.open_session(
+            {"snapshot_id": "abc", "platform": "vc-a", "vm_name": "files", "source_path": "/staging/files"},
+            actor="",
+        )
+
+
+def test_operation_timeout_tracks_runtime_window(broker):
+    _manager, socket_path = broker
+    assert _client(socket_path, runtime_timeout=14400).operation_timeout_seconds == 14400
+    assert _client(socket_path, runtime_timeout=10).operation_timeout_seconds == 60
+    assert _client(socket_path, runtime_timeout=999999).operation_timeout_seconds == 172800
