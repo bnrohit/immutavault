@@ -18,16 +18,18 @@ else
 fi
 
 if [[ -c /dev/fuse ]]; then
-  pass "/dev/fuse available"
+  pass "/dev/fuse available for the FLR broker"
 else
   fail "/dev/fuse is unavailable"
 fi
 
-if id immutavault >/dev/null 2>&1; then
-  if runuser -u immutavault -- test -r /dev/fuse 2>/dev/null && runuser -u immutavault -- test -w /dev/fuse 2>/dev/null; then
-    pass "immutavault can access /dev/fuse"
-  else
-    fail "immutavault cannot read/write /dev/fuse"
+# v1.0.1 privilege separation: the network-facing immutavault user should not
+# need direct FUSE access. If services are active, require broker/socket health.
+if command -v systemctl >/dev/null 2>&1; then
+  if systemctl is-active --quiet immutavault-flr.service 2>/dev/null; then
+    [[ -S /run/immutavault/flr.sock ]] && pass "FLR broker socket active" || fail "FLR broker is active but socket is missing"
+  elif systemctl is-active --quiet immutavault-portal.service 2>/dev/null; then
+    fail "portal is active but FLR broker is not active"
   fi
 fi
 
