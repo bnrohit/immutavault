@@ -9,7 +9,7 @@ from .adapters import build_adapter
 from .config import ReplicaConfig
 from .engine import BackupEngine
 from .integrity import verify_manifest
-from .v2v import V2VManager
+from .v2v_cert import CertifiedV2VManager
 from .v2v_config import V10Config
 
 
@@ -25,7 +25,7 @@ class CertifiedBackupEngine(BackupEngine):
 
     def __init__(self, cfg: V10Config) -> None:
         super().__init__(cfg)
-        self.v2v = V2VManager(cfg)
+        self.v2v = CertifiedV2VManager(cfg)
 
     def doctor(self) -> dict[str, list[str]]:
         result = super().doctor()
