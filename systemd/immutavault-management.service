@@ -1,0 +1,35 @@
+[Unit]
+Description=Immutavault privileged management broker
+After=network-online.target immutavault-flr.service
+Wants=network-online.target immutavault-flr.service
+Before=immutavault-portal.service
+StartLimitIntervalSec=0
+
+[Service]
+UMask=0077
+Type=simple
+User=root
+Group=immutavault
+EnvironmentFile=/etc/immutavault/immutavault.env
+ExecStart=/usr/local/bin/immutavault-management-broker --config /etc/immutavault/immutavault.yml --env /etc/immutavault/immutavault.env --socket /run/immutavault/manage.sock
+Restart=on-failure
+RestartSec=2
+RuntimeDirectory=immutavault
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ReadWritePaths=/etc/immutavault /etc/systemd/system /srv/immutavault/storage
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+LockPersonality=true
+RestrictSUIDSGID=true
+CapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target
