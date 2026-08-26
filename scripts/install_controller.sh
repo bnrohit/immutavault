@@ -59,6 +59,7 @@ PYEOF
 "$TARGET/bin/immutavault" --help >/dev/null
 "$TARGET/bin/immutavault-setup" --help >/dev/null
 "$TARGET/bin/immutavault-flr-broker" --help >/dev/null
+"$TARGET/bin/immutavault-management-broker" --help >/dev/null
 
 PREVIOUS=$(readlink -f "$CURRENT" 2>/dev/null || true)
 ln -sfn "$TARGET" "${CURRENT}.new"
@@ -66,6 +67,7 @@ mv -Tf "${CURRENT}.new" "$CURRENT"
 ln -sfn "$CURRENT/bin/immutavault" /usr/local/bin/immutavault
 ln -sfn "$CURRENT/bin/immutavault-setup" /usr/local/bin/immutavault-setup
 ln -sfn "$CURRENT/bin/immutavault-flr-broker" /usr/local/bin/immutavault-flr-broker
+ln -sfn "$CURRENT/bin/immutavault-management-broker" /usr/local/bin/immutavault-management-broker
 if [[ -n "$PREVIOUS" && "$PREVIOUS" != "$TARGET" ]]; then
   printf '%s\n' "$PREVIOUS" > "$BASE/previous-release"
 fi
@@ -75,9 +77,10 @@ rm -rf "$BUILD_TMP"
 
 install -d -o root -g immutavault -m 0750 /etc/immutavault
 install -d -o immutavault -g immutavault -m 0750 /var/lib/immutavault "$ROOT/staging" "$ROOT/restore-staging" "$ROOT/verify-staging"
-# Only the root FLR broker mounts recovery points. The network portal must not
-# own the mount tree or inherit direct /dev/fuse access.
+# Only the root FLR broker mounts guest recovery points. Management-mounted NAS
+# targets live under a separate root-owned path and are never mounted by portal.
 install -d -o root -g root -m 0700 "$ROOT/flr"
+install -d -o root -g immutavault -m 0750 "$ROOT/storage"
 if getent group fuse >/dev/null 2>&1 && id -nG immutavault | tr ' ' '\n' | grep -qx fuse; then
   gpasswd -d immutavault fuse >/dev/null 2>&1 || true
 fi
@@ -115,4 +118,4 @@ fi
 chown root:immutavault /etc/immutavault/immutavault.env
 chmod 640 /etc/immutavault/immutavault.env
 
-echo "Controller installed at $TARGET. Run 'sudo ./scripts/launch_setup_console.sh' for guided browser setup, or configure /etc/immutavault manually."
+echo "Controller installed at $TARGET. The primary portal now includes guided setup; the standalone setup console remains available as a break-glass/local migration aid."
