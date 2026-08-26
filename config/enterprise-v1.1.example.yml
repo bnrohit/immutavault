@@ -1,0 +1,205 @@
+repository:
+  url: "rest:https://backup.example.com:8000/"
+  local_path: "/srv/immutavault/repository"
+  staging_path: "/srv/immutavault/staging"
+  cacert: "/etc/immutavault/tls/ca.crt"
+  verify_percent: 5
+  lock_file: "/run/lock/immutavault.lock"
+  retention:
+    keep_within_days: 30
+    keep_daily: 30
+    keep_weekly: 8
+    keep_monthly: 12
+    keep_yearly: 3
+    min_restore_points: 2
+
+runtime:
+  state_db: "/var/lib/immutavault/state.db"
+  command_timeout_seconds: 14400
+  keep_staging_on_failure: true
+  restore_staging_path: "/srv/immutavault/restore-staging"
+  verify_staging_path: "/srv/immutavault/verify-staging"
+  staging_min_free_percent: 10
+  state_backup_path: "/var/lib/immutavault/state-backups"
+  state_backup_keep: 288
+
+protection:
+  rpo_target_minutes: 1440
+  anomaly_data_added_ratio: 0.70
+  anomaly_size_change_ratio: 0.50
+  preserve_suspicious_points_days: 90
+  verify_after_backup: false
+  require_four_eyes_restore: true
+
+v2v:
+  enabled: false
+  builtin_vmware_to_proxmox: true
+  require_verified_point: true
+  allow_suspicious_points: false
+  virt_v2v_min_version: "2.12.0"
+  max_disks: 16
+  max_virtual_bytes: 70368744177664
+  require_network_mapping: true
+  allow_uefi: true
+  allow_secure_boot: false
+  provider_timeout_seconds: 14400
+  providers: []
+
+tenants:
+  - id: "campus-a"
+    name: "Campus A"
+    platforms: ["vc-campus-a", "pve-campus-a", "xcp-campus-a"]
+
+portal:
+  enabled: true
+  listen: "0.0.0.0"
+  port: 8787
+  tls_cert: "/etc/immutavault/tls/portal.crt"
+  tls_key: "/etc/immutavault/tls/portal.key"
+  users:
+    - name: "break-glass-admin"
+      role: "admin"
+      token_env: "IMMUTAVAULT_ADMIN_TOKEN"
+      tenants: ["*"]
+      sources: ["*"]
+      vm_patterns: ["*"]
+
+identity:
+  oidc:
+    enabled: true
+    issuer: "https://login.microsoftonline.com/11111111-2222-3333-4444-555555555555/v2.0"
+    client_id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    client_secret_env: "IMMUTAVAULT_ENTRA_CLIENT_SECRET"
+    redirect_uri: "https://backup.example.com/auth/callback"
+    session_secret_env: "IMMUTAVAULT_OIDC_SESSION_SECRET"
+    session_minutes: 60
+    require_mfa: true
+    allowed_tenant_ids: ["11111111-2222-3333-4444-555555555555"]
+    required_acrs: []
+    allow_local_tokens: false
+    default_role: "viewer"
+    default_tenants: []
+    group_role_map:
+      "10000000-0000-0000-0000-000000000001": "admin"
+      "10000000-0000-0000-0000-000000000002": "approver"
+      "10000000-0000-0000-0000-000000000003": "restore_operator"
+    group_tenant_map:
+      "20000000-0000-0000-0000-000000000001": ["campus-a"]
+    app_role_map:
+      "Immutavault.Admin": "admin"
+      "Immutavault.Approver": "approver"
+      "Immutavault.RestoreOperator": "restore_operator"
+    app_role_tenant_map: {}
+
+observability:
+  metrics_enabled: true
+  metrics_path: "/metrics"
+  metrics_token_env: "IMMUTAVAULT_METRICS_TOKEN"
+  include_platform_labels: true
+  websocket_enabled: true
+  websocket_listen: "0.0.0.0"
+  websocket_port: 8788
+  websocket_public_url: "wss://backup.example.com:8788"
+  websocket_poll_seconds: 2
+  websocket_ticket_ttl_seconds: 60
+  websocket_allowed_origins:
+    - "https://backup.example.com"
+
+flr:
+  enabled: true
+  mount_root: "/srv/immutavault/flr"
+  session_ttl_minutes: 30
+  max_download_bytes: 5368709120
+  max_sessions_per_user: 2
+  max_disks: 16
+  mount_wait_seconds: 30
+
+platforms:
+  - name: "vc-campus-a"
+    type: "vmware"
+    enabled: false
+    endpoint: "https://vcenter-a.example.local/sdk"
+    mode: "hot-clone-export"
+    include: ["app01", "db01"]
+    exclude: []
+    options:
+      username_env: "VC_A_USERNAME"
+      password_env: "VC_A_PASSWORD"
+      insecure: false
+      quiesce: true
+      quiesce_fallback_crash_consistent: false
+      application_consistency_strict: true
+
+  - name: "pve-campus-a"
+    type: "proxmox"
+    enabled: false
+    endpoint: "pve-a.example.local"
+    ssh_user: "backupsvc"
+    mode: "vzdump"
+    include: ["*"]
+    exclude: []
+    options:
+      ssh_key_env: "PVE_A_SSH_KEY"
+      compress: "0"
+      restore_storage: "local-lvm"
+      v2v_storage: "local-lvm"
+      v2v_efi_storage: "local-lvm"
+      v2v_default_bridge: "vmbr0"
+      v2v_network_map:
+        "VM Network": "vmbr0"
+        "Servers": "vmbr20"
+        "*": "vmbr0"
+
+  - name: "xcp-campus-a"
+    type: "xcpng"
+    enabled: false
+    endpoint: "xcp-a.example.local"
+    ssh_user: "backupsvc"
+    mode: "snapshot-export"
+    include: ["*"]
+    exclude: []
+    options:
+      ssh_key_env: "XCP_A_SSH_KEY"
+
+replicas:
+  - name: "wasabi-dr"
+    enabled: false
+    backend: "s3"
+    provider: "wasabi"
+    endpoint: "https://s3.us-east-1.wasabisys.com"
+    region: "us-east-1"
+    bucket: "example-immutavault"
+    prefix: "campus-a"
+    access_key_env: "WASABI_ACCESS_KEY_ID"
+    secret_key_env: "WASABI_SECRET_ACCESS_KEY"
+    password_env: "RESTIC_WASABI_PASSWORD"
+    object_lock_enabled: true
+    object_lock_mode: "COMPLIANCE"
+    object_lock_days: 30
+
+# v1.1 named protection policies. Exact VM names are required. Empty
+# replica_targets means primary repository only.
+management:
+  enabled: true
+  broker_socket: "/run/immutavault/manage.sock"
+  policies:
+    - id: "daily-production"
+      name: "Daily Production"
+      enabled: true
+      selections:
+        - platform: "vc-campus-a"
+          vms: ["app01", "db01"]
+      schedule:
+        frequency: "daily"
+        time: "22:00"
+      immutable_days: 30
+      replica_targets: []
+      verify_after_backup: true
+  # These names are examples only. A global admin must save a network through
+  # the portal after live target validation before a DR test can use it.
+  dr_test_networks: {}
+  dr_test_boot_seconds: 30
+  dr_test_auto_cleanup: true
+
+disaster_recovery:
+  enabled: false

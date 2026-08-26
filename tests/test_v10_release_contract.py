@@ -3,20 +3,13 @@ from pathlib import Path
 from immutavault.v2v_config import load_v10_config
 
 
-def test_v10_release_contract_is_present():
-    assert Path("VERSION").read_text(encoding="utf-8").strip() == "1.0.1"
+def test_v10_safety_contract_is_preserved_under_v11():
+    assert Path("VERSION").read_text(encoding="utf-8").strip() == "1.1.0"
     readme = Path("README.md").read_text(encoding="utf-8")
-    assert readme.startswith("# Immutavault v1.0.1\n")
+    assert readme.startswith("# Immutavault v1.1.0\n")
     for token in (
-        "immutavault-vmware-proxmox-v1",
-        "virt-v2v",
-        "VirtIO",
-        "Secure Boot",
-        "vTPM",
-        "powered off",
-        "certified provider",
-        "FLR broker",
-        "target readiness",
+        "immutavault-vmware-proxmox-v1", "virt-v2v", "VirtIO", "Secure Boot",
+        "vTPM", "powered off", "certified provider", "FLR broker", "target readiness",
     ):
         assert token in readme
 
@@ -29,8 +22,9 @@ def test_v10_release_contract_is_present():
     assert cfg.v2v.virt_v2v_min_version == "2.12.0"
 
     pyproject = Path("pyproject.toml").read_text(encoding="utf-8")
-    assert 'immutavault = "immutavault.cli_v10:main"' in pyproject
+    assert 'immutavault = "immutavault.cli_v11:main"' in pyproject
     assert 'immutavault-flr-broker = "immutavault.flr_broker:main"' in pyproject
+    assert 'immutavault-management-broker = "immutavault.management_service_final:main"' in pyproject
 
     code = Path("src/immutavault/v2v.py").read_text(encoding="utf-8")
     for token in ("input:ova", "output:local", "source_read_only", "target_new_vm", "rollback_available"):

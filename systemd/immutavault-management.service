@@ -28,7 +28,9 @@ ProtectControlGroups=true
 ProtectKernelModules=true
 LockPersonality=true
 RestrictSUIDSGID=true
-CapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER
+# CAP_SYS_ADMIN is required only here for administrator-requested NFS/SMB test
+# mounts. The network-facing portal retains an empty capability set.
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER
 AmbientCapabilities=
 
 [Install]
