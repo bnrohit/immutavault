@@ -1,7 +1,7 @@
 [Unit]
-Description=Immutavault self-service recovery portal
-After=network-online.target immutavault-flr.service
-Wants=network-online.target immutavault-flr.service
+Description=Immutavault unified enterprise management and recovery portal
+After=network-online.target immutavault-flr.service immutavault-management.service
+Wants=network-online.target immutavault-flr.service immutavault-management.service
 StartLimitIntervalSec=0
 
 [Service]
@@ -13,8 +13,8 @@ EnvironmentFile=/etc/immutavault/immutavault.env
 ExecStart=/usr/local/bin/immutavault --config /etc/immutavault/immutavault.yml portal
 Restart=always
 RestartSec=2
-# The portal is network-facing and never mounts recovery filesystems itself.
-# FUSE/libguestfs operations are isolated in immutavault-flr.service.
+# The network-facing portal has no mount/configuration privilege. FUSE and
+# configuration/systemd mutations live behind local SO_PEERCRED Unix brokers.
 NoNewPrivileges=true
 PrivateTmp=true
 PrivateDevices=true
