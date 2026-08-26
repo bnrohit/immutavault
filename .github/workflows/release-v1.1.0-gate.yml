@@ -3,6 +3,8 @@ on:
   pull_request:
     branches: [main]
     types: [opened, reopened, synchronize]
+  issues:
+    types: [opened]
   workflow_dispatch:
   schedule:
     - cron: '17 * * * *'
@@ -21,7 +23,11 @@ env:
 
 jobs:
   prepare:
-    if: github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'feature/v1.1-unified-management')
+    if: >-
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'feature/v1.1-unified-management') ||
+      (github.event_name == 'issues' && github.actor == github.repository_owner && github.event.issue.title == 'RUN v1.1.0 RELEASE GATE') ||
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule'
     runs-on: ubuntu-24.04
     outputs:
       sha: ${{ steps.pin.outputs.sha }}
