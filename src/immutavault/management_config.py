@@ -67,6 +67,7 @@ class ManagementConfig:
 class V11Config:
     v10: V10Config
     management: ManagementConfig
+    source_path: str = ""
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.v10, name)
@@ -102,17 +103,13 @@ def _schedule(raw: Any, name: str) -> PolicySchedule:
         if invalid:
             raise ValueError(f"{name}.weekdays contains invalid values: {invalid}")
     every_hours = _bounded_int(raw.get("every_hours", 1), f"{name}.every_hours", 1, 24)
-    return PolicySchedule(
-        frequency=frequency,
-        time=clock,
-        weekdays=weekdays,
-        every_hours=every_hours,
-    )
+    return PolicySchedule(frequency=frequency, time=clock, weekdays=weekdays, every_hours=every_hours)
 
 
 def load_v11_config(path: str | Path) -> V11Config:
-    v10 = load_v10_config(path)
-    raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    config_path = Path(path)
+    v10 = load_v10_config(config_path)
+    raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     management_raw = raw.get("management") or {}
     if not isinstance(management_raw, dict):
         raise ValueError("management must be a mapping")
@@ -126,9 +123,7 @@ def load_v11_config(path: str | Path) -> V11Config:
             raise ValueError("management.policies entries must be mappings")
         policy_id = str(item.get("id") or "").strip().lower()
         if not POLICY_ID_RE.fullmatch(policy_id):
-            raise ValueError(
-                f"management.policies[{index}].id must match {POLICY_ID_RE.pattern}"
-            )
+            raise ValueError(f"management.policies[{index}].id must match {POLICY_ID_RE.pattern}")
         if policy_id in ids:
             raise ValueError(f"duplicate management policy id: {policy_id}")
         ids.add(policy_id)
@@ -148,17 +143,14 @@ def load_v11_config(path: str | Path) -> V11Config:
                 raise ValueError(f"management policy {policy_id}: duplicate selection for {platform}")
             seen_platforms.add(platform)
             vm_rows = selection.get("vms") or []
-            if isinstance(vm_rows, str):
-                vm_rows = [vm_rows]
+            if isinstance(vm_rows, str): vm_rows = [vm_rows]
             if not isinstance(vm_rows, list) or not vm_rows:
                 raise ValueError(f"management policy {policy_id}: {platform} requires at least one VM")
             vms = tuple(str(vm).strip() for vm in vm_rows if str(vm).strip())
             if not vms:
                 raise ValueError(f"management policy {policy_id}: {platform} requires at least one VM")
             if any(any(ch in vm for ch in "*?[]") for vm in vms):
-                raise ValueError(
-                    f"management policy {policy_id}: checkbox policies require exact VM names, not wildcard patterns"
-                )
+                raise ValueError(f"management policy {policy_id}: checkbox policies require exact VM names, not wildcard patterns")
             if len(vms) != len(set(vms)):
                 raise ValueError(f"management policy {policy_id}: duplicate VM name in {platform}")
             selections.append(PolicySelection(platform=platform, vms=vms))
@@ -166,16 +158,13 @@ def load_v11_config(path: str | Path) -> V11Config:
             raise ValueError(f"management policy {policy_id}: at least one platform/VM selection is required")
 
         replicas_raw = item.get("replica_targets") or []
-        if isinstance(replicas_raw, str):
-            replicas_raw = [replicas_raw]
+        if isinstance(replicas_raw, str): replicas_raw = [replicas_raw]
         if not isinstance(replicas_raw, list):
             raise ValueError(f"management policy {policy_id}: replica_targets must be a list")
         replicas = tuple(str(name).strip() for name in replicas_raw if str(name).strip())
         unknown_replicas = sorted(set(replicas) - replica_names)
         if unknown_replicas:
-            raise ValueError(
-                f"management policy {policy_id}: unknown or disabled replicas: {unknown_replicas}"
-            )
+            raise ValueError(f"management policy {policy_id}: unknown or disabled replicas: {unknown_replicas}")
 
         policies.append(ProtectionPolicy(
             id=policy_id,
@@ -183,10 +172,7 @@ def load_v11_config(path: str | Path) -> V11Config:
             enabled=bool(item.get("enabled", True)),
             selections=tuple(selections),
             schedule=_schedule(item.get("schedule"), f"management policy {policy_id}.schedule"),
-            immutable_days=_bounded_int(
-                item.get("immutable_days", v10.repository.retention.keep_within_days),
-                f"management policy {policy_id}.immutable_days", 1, 3650,
-            ),
+            immutable_days=_bounded_int(item.get("immutable_days", v10.repository.retention.keep_within_days), f"management policy {policy_id}.immutable_days", 1, 3650),
             replica_targets=replicas,
             verify_after_backup=bool(item.get("verify_after_backup", True)),
         ))
@@ -216,9 +202,7 @@ def load_v11_config(path: str | Path) -> V11Config:
         broker_socket=broker_socket,
         policies=tuple(policies),
         dr_test_networks=networks,
-        dr_test_boot_seconds=_bounded_int(
-            management_raw.get("dr_test_boot_seconds", 30), "management.dr_test_boot_seconds", 5, 900
-        ),
+        dr_test_boot_seconds=_bounded_int(management_raw.get("dr_test_boot_seconds", 30), "management.dr_test_boot_seconds", 5, 900),
         dr_test_auto_cleanup=bool(management_raw.get("dr_test_auto_cleanup", True)),
     )
-    return V11Config(v10=v10, management=management)
+    return V11Config(v10=v10, management=management, source_path=str(config_path))
