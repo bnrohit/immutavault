@@ -19,7 +19,7 @@ dev = ["pytest>=8,<9"]
 immutavault = "immutavault.cli_v11:main"
 immutavault-setup = "immutavault.setup_wizard:main"
 immutavault-flr-broker = "immutavault.flr_broker:main"
-immutavault-management-broker = "immutavault.management_broker:main"
+immutavault-management-broker = "immutavault.management_service:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
