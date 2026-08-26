@@ -10,17 +10,21 @@ from .v2v_engine import CertifiedBackupEngine
 class _PolicyConfigView:
     """Read-only config overlay used for one named policy execution.
 
-    It narrows platform include scopes to exact checkbox-selected VM names and can
-    narrow replica targets, while delegating every other enterprise/V2V setting to
-    the validated v1.1 configuration. The persistent YAML is never mutated for a run.
+    It narrows platform include scopes to exact checkbox-selected VM names, can
+    narrow replica targets, and applies the policy immutable window to that run.
+    The persistent YAML is never mutated while a policy is executing.
     """
 
     def __init__(self, cfg: V11Config, policy: ProtectionPolicy) -> None:
         self._cfg = cfg
         selections = {row.platform: row.vms for row in policy.selections}
         self.platforms = [
-            replace(platform, enabled=platform.enabled and platform.name in selections,
-                    include=list(selections.get(platform.name, ())), exclude=[])
+            replace(
+                platform,
+                enabled=platform.enabled and platform.name in selections,
+                include=list(selections.get(platform.name, ())),
+                exclude=[],
+            )
             for platform in cfg.platforms
         ]
         if policy.replica_targets:
@@ -29,6 +33,10 @@ class _PolicyConfigView:
         else:
             self.replicas = list(cfg.replicas)
         self.protection = replace(cfg.protection, verify_after_backup=policy.verify_after_backup)
+        self.repository = replace(
+            cfg.repository,
+            retention=replace(cfg.repository.retention, keep_within_days=policy.immutable_days),
+        )
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._cfg, name)
@@ -49,10 +57,7 @@ class ProtectionPolicyRunner:
         if not policy.enabled:
             raise RuntimeError(f"protection policy {policy.id} is disabled")
         engine = CertifiedBackupEngine(_PolicyConfigView(self.cfg, policy))
-        results = engine.backup_all(
-            dry_run=dry_run,
-            immutable_days_override=policy.immutable_days,
-        )
+        results = engine.backup_all(dry_run=dry_run)
         failed = [row for row in results if row.get("status") == "failed"]
         detail = {
             "policy_id": policy.id,
