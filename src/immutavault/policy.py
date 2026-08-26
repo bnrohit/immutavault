@@ -10,9 +10,9 @@ from .v2v_engine import CertifiedBackupEngine
 class _PolicyConfigView:
     """Read-only config overlay used for one named policy execution.
 
-    It narrows platform include scopes to exact checkbox-selected VM names, can
-    narrow replica targets, and applies the policy immutable window to that run.
-    The persistent YAML is never mutated while a policy is executing.
+    It narrows platform include scopes to exact checkbox-selected VM names,
+    narrows replica targets, and applies the policy immutable window to that
+    run. An empty replica list means primary repository only.
     """
 
     def __init__(self, cfg: V11Config, policy: ProtectionPolicy) -> None:
@@ -27,11 +27,8 @@ class _PolicyConfigView:
             )
             for platform in cfg.platforms
         ]
-        if policy.replica_targets:
-            selected = set(policy.replica_targets)
-            self.replicas = [replica for replica in cfg.replicas if replica.name in selected]
-        else:
-            self.replicas = list(cfg.replicas)
+        selected = set(policy.replica_targets)
+        self.replicas = [replica for replica in cfg.replicas if replica.name in selected]
         self.protection = replace(cfg.protection, verify_after_backup=policy.verify_after_backup)
         self.repository = replace(
             cfg.repository,
