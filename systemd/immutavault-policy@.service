@@ -1,0 +1,24 @@
+[Unit]
+Description=Immutavault protection policy %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+UMask=0077
+Type=oneshot
+User=immutavault
+Group=immutavault
+EnvironmentFile=/etc/immutavault/immutavault.env
+ExecStart=/usr/local/bin/immutavault --config /etc/immutavault/immutavault.yml policy-run --name %i
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+LockPersonality=true
+RestrictSUIDSGID=true
+CapabilityBoundingSet=
+AmbientCapabilities=
