@@ -8,7 +8,7 @@ from . import cli_v10 as v10
 from .management_broker import ManagementBrokerClient
 from .management_config import load_v11_config
 from .policy import ProtectionPolicyRunner
-from .portal_v11 import Portal
+from .portal_unified import Portal
 
 
 MANAGEMENT_COMMANDS = {"policy-list", "policy-run", "policy-dry-run", "management-status"}
@@ -44,17 +44,11 @@ def _run_management(argv: list[str]) -> int:
                 "schedule": policy.schedule.on_calendar(),
                 "immutable_days": policy.immutable_days,
                 "replica_targets": list(policy.replica_targets),
-                "selections": [
-                    {"platform": row.platform, "vms": list(row.vms)} for row in policy.selections
-                ],
+                "selections": [{"platform": row.platform, "vms": list(row.vms)} for row in policy.selections],
             })
         print(json.dumps(rows, indent=2)); return 0
     if args.command in {"policy-run", "policy-dry-run"}:
-        result = ProtectionPolicyRunner(cfg).run(
-            args.name,
-            dry_run=args.command == "policy-dry-run",
-            actor="cli",
-        )
+        result = ProtectionPolicyRunner(cfg).run(args.name, dry_run=args.command == "policy-dry-run", actor="cli")
         print(json.dumps(result, indent=2))
         return 1 if result.get("failed") else 0
     if args.command == "management-status":
@@ -68,9 +62,8 @@ def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if _command_name(args) in MANAGEMENT_COMMANDS:
         return _run_management(args)
-
-    # Reuse the v1.0 command surface but inject the additive v1.1 configuration
-    # and unified portal. V2V policy remains the same certified fail-closed engine.
+    # Reuse the certified v1.0 command surface while replacing only the additive
+    # config loader and portal implementation. V2V fail-closed policy is retained.
     v10.load_v10_config = load_v11_config
     v10.Portal = Portal
     return v10.main(args)
