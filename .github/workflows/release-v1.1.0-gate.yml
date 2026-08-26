@@ -1,0 +1,141 @@
+name: release-v1.1.0-gate
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+  workflow_dispatch:
+  schedule:
+    - cron: '17 * * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-v1.1.0-gate
+  cancel-in-progress: false
+
+env:
+  RELEASE_BRANCH: feature/v1.1-unified-management
+  EXPECTED_TREE: aa104ba0c697c00c3a94599641b1c6a3f135d0d0
+  RELEASE_TAG: v1.1.0
+
+jobs:
+  prepare:
+    if: github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'feature/v1.1-unified-management')
+    runs-on: ubuntu-24.04
+    outputs:
+      sha: ${{ steps.pin.outputs.sha }}
+      tree: ${{ steps.pin.outputs.tree }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - id: pin
+        name: Pin exact release candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "+refs/heads/${RELEASE_BRANCH}:refs/remotes/origin/${RELEASE_BRANCH}"
+          SHA=$(git rev-parse "refs/remotes/origin/${RELEASE_BRANCH}")
+          TREE=$(git rev-parse "${SHA}^{tree}")
+          test "$TREE" = "$EXPECTED_TREE"
+          test "$(git show "${SHA}:VERSION")" = "1.1.0"
+          test "$(git show "${SHA}:src/immutavault/__init__.py" | tr -d '\r')" = '__version__ = "1.1.0"'
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "tree=$TREE" >> "$GITHUB_OUTPUT"
+          echo "Pinned release candidate $SHA tree $TREE"
+
+  python-matrix:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python -m pip install -e '.[dev]'
+      - run: python -m compileall -q src tests
+      - run: pytest -q
+      - run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          version = Path('VERSION').read_text().strip()
+          init = Path('src/immutavault/__init__.py').read_text()
+          pyproject = Path('pyproject.toml').read_text()
+          assert version == '1.1.0'
+          assert f'__version__ = "{version}"' in init
+          assert re.search(r'^version = "' + re.escape(version) + r'"$', pyproject, re.M)
+          PY
+
+  package-and-units:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e '.[dev]'
+      - run: bash -n scripts/*.sh
+      - run: ./scripts/release_check.sh
+
+  live-data-plane:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+      - name: Install OS prerequisites
+        run: sudo apt-get update && sudo apt-get install -y bzip2 apache2-utils curl openssl ca-certificates
+      - name: Install pinned and verified restic/rest-server
+        run: |
+          sudo ./scripts/install_restic.sh
+          sudo ./scripts/install_rest_server.sh
+          ./scripts/check_restic.sh /usr/local/bin/restic
+          ./scripts/check_rest_server.sh /usr/local/bin/rest-server
+      - name: Exercise authenticated TLS append-only backup and restore
+        run: ./scripts/ci_data_plane.sh
+
+  release:
+    needs: [prepare, python-matrix, package-and-units, live-data-plane]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Fast-forward exact tested tree and create immutable release tag
+        env:
+          RELEASE_SHA: ${{ needs.prepare.outputs.sha }}
+          RELEASE_TREE: ${{ needs.prepare.outputs.tree }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RELEASE_TREE" = "$EXPECTED_TREE"
+          git fetch origin main "+refs/heads/${RELEASE_BRANCH}:refs/remotes/origin/${RELEASE_BRANCH}" --tags
+          test "$(git rev-parse "${RELEASE_SHA}^{tree}")" = "$EXPECTED_TREE"
+          test "$(git show "${RELEASE_SHA}:VERSION")" = "1.1.0"
+          test "$(git rev-parse "refs/remotes/origin/${RELEASE_BRANCH}")" = "$RELEASE_SHA"
+          MAIN_SHA=$(git rev-parse refs/remotes/origin/main)
+          git merge-base --is-ancestor "$MAIN_SHA" "$RELEASE_SHA"
+          if git rev-parse -q --verify "refs/tags/${RELEASE_TAG}" >/dev/null; then
+            echo "${RELEASE_TAG} already exists; refusing to move it" >&2
+            exit 1
+          fi
+          git config user.name "Rohith Bommalla Naresh"
+          git config user.email "bnr756@gmail.com"
+          git push origin "${RELEASE_SHA}:refs/heads/main"
+          git tag -a "$RELEASE_TAG" "$RELEASE_SHA" -m "Immutavault v1.1.0 — Unified management and appliance tooling"
+          git push origin "refs/tags/${RELEASE_TAG}"
+          echo "Released ${RELEASE_TAG} at ${RELEASE_SHA} tree ${RELEASE_TREE}"
