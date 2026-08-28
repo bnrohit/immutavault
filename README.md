@@ -82,6 +82,8 @@ Wizard-managed NFS/SMB mounts are constrained below `/srv/immutavault/storage`. 
 
 A recovery test is intentionally **not** production failover. It uses the normal certified restore engine and therefore retains tenant boundaries, recovery-point verification, anomaly blocking and four-eyes approval.
 
+In the Recovery view, operators start this controlled workflow with **Run DR Test**; the action does not bypass approval, recovery-point verification, or isolation checks.
+
 Before a test network can be used, a global administrator must explicitly allow-list it and the target hypervisor must confirm it exists. The test workflow then:
 
 1. requires a verified, non-suspicious recovery point;
