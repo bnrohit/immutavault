@@ -18,7 +18,7 @@ concurrency:
 
 env:
   RELEASE_BRANCH: feature/v1.1-unified-management
-  EXPECTED_TREE: aa104ba0c697c00c3a94599641b1c6a3f135d0d0
+  EXPECTED_TREE: 7f90c0380b04bac8441ea5effd83a2018a20bbce
   RELEASE_TAG: v1.1.0
 
 jobs:
