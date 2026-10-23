@@ -168,3 +168,53 @@ def verify_replica_restore(engine: Any, *, snapshot_id: str, replica_name: str,
         raise ReplicaVerificationError(
             "replica restore verification failed; inspect controller logs without sharing secrets"
         ) from exc
+
+
+def verify_due_replica(engine: Any, *, replica_name: str, actor: str,
+                       max_backup_gib: int = 100, execute: bool = False,
+                       point_limit: int = 500) -> dict[str, Any]:
+    """At most ONE bounded, due replica readback per explicit scheduler run.
+
+    Prefers the newest protected snapshot (useful to DR RPO) but never falsely
+    labels copies larger than the budget as verified. This is intentionally NOT
+    a continuous replication/copy engine and must be explicitly scheduled.
+    """
+    if not replica_name or replica_name == "primary":
+        raise ReplicaVerificationError("specific non-primary replica required")
+    if not actor or not actor.strip():
+        raise ReplicaVerificationError("named actor required")
+    if type(max_backup_gib) is not int or not 1 <= max_backup_gib <= 10000:
+        raise ReplicaVerificationError("max_backup_gib must be an integer from 1 to 10000")
+    if type(point_limit) is not int or not 1 <= point_limit <= 5000:
+        raise ReplicaVerificationError("point_limit must be an integer from 1 to 5000")
+    engine._replica(replica_name)  # fail on disabled/unknown replicas
+    budget = max_backup_gib * 2**30
+    skipped_oversized = 0
+    due = 0
+    for point in engine.state.list_points(limit=point_limit):
+        if not point.get("verified") or point.get("suspicious"):
+            continue
+        sid = str(point["snapshot_id"])
+        copy = engine.state.get_recovery_copy(sid, replica_name)
+        if not copy or copy.get("status") != "success" or replica_copy_ready(copy):
+            continue
+        due += 1
+        size = point.get("backup_bytes")
+        if type(size) is not int or size <= 0 or size > budget:
+            skipped_oversized += 1
+            continue
+        if not execute:
+            return {
+                "status": "DRY_RUN", "snapshot_id": sid, "replica": replica_name,
+                "backup_bytes": size, "max_backup_gib": max_backup_gib,
+                "hypervisor_changes": False, "next": "pass --execute-readback to verify this copy",
+            }
+        result = verify_replica_restore(
+            engine, snapshot_id=sid, replica_name=replica_name, actor=actor)
+        return {**result, "status": "VERIFIED_ONE", "max_backup_gib": max_backup_gib}
+    return {
+        "status": "NO_ELIGIBLE_COPY" if due else "UP_TO_DATE",
+        "replica": replica_name, "due": due, "skipped_oversized_or_unknown": skipped_oversized,
+        "hypervisor_changes": False,
+        "warning": "oversized/unknown copies still require separate, capacity-approved readback",
+    }
