@@ -1,5 +1,14 @@
 # Immutavault v1.1.0
 
+> **Development-only cluster migration:** The feature/cluster-migration-planner
+> branch contains XCP-ng/VMware inventory discovery, conservative migration
+> readiness checks, existing four-eyes restore-request integration and
+> explicitly approved, powered-off XCP-ng staging. It is **not** a live/warm
+> migration engine, does **not** perform automatic production cutover, and
+> is not certified for production. See
+> [Cluster Migration](docs/CLUSTER_MIGRATION.md). The stable v1.1.0 tag is unchanged.
+
+
 Immutavault is an open, vendor-neutral **immutable VM backup, recovery, certified V2V conversion, file-level recovery, replication and disaster-recovery platform** for VMware/vCenter, Proxmox VE and XCP-ng.
 
 v1.1.0 is the **Unified Management & Appliance** release. It keeps the fail-closed V2V, immutable repository, tenant isolation, OIDC/MFA, FLR broker and target readiness controls from v1.0.1, while making normal deployment and day-2 operation substantially closer to a commercial backup appliance.
