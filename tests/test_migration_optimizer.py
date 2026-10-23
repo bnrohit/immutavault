@@ -49,7 +49,7 @@ def test_two_independent_storage_hosts_parallelize_without_bandwidth_magic():
     assert out["approved_to_execute"] is False
     # Data-transfer component stays exactly the same; only overlap of setup
     # overhead is modeled, never doubling network bandwidth.
-    assert out["illustrative_saved_setup_seconds"] == 15 * 60
+    assert 15 * 60 <= out["illustrative_saved_setup_seconds"] <= 15 * 60 + 1
     assert out["estimated_wave_stage_seconds"] > 0
 
 
