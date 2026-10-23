@@ -7,6 +7,7 @@ create, power on, shut down, delete, or overwrite any hypervisor VM.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -65,6 +66,30 @@ def _restored_source(root: Path, path: Any) -> Path:
     return result
 
 
+def _ensure_safe_manifest(root: Path) -> None:
+    """Refuse file/symlink escapes even if a restored manifest is malicious."""
+    path = root / ".immutavault-manifest.json"
+    if not path.is_file() or path.is_symlink():
+        raise ReplicaVerificationError("restored manifest file is missing or unsafe")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or not isinstance(data.get("files"), list):
+        raise ReplicaVerificationError("restored manifest has an invalid schema")
+    for entry in data["files"]:
+        if not isinstance(entry, dict):
+            raise ReplicaVerificationError("restored manifest contains invalid entries")
+        name = entry.get("path")
+        if not isinstance(name, str) or not name or name.startswith("/") or "\\x00" in name:
+            raise ReplicaVerificationError("restored manifest contains unsafe file path")
+        if any(part in ("", ".", "..") for part in name.split("/")):
+            raise ReplicaVerificationError("restored manifest contains traversal path")
+        item = root.joinpath(*PurePosixPath(name).parts)
+        current = item
+        while current != root:
+            if current.is_symlink():
+                raise ReplicaVerificationError("restored manifest accesses a symbolic-link path")
+            current = current.parent
+
+
 def verify_replica_restore(engine: Any, *, snapshot_id: str, replica_name: str,
                            actor: str) -> dict[str, Any]:
     """Restore FROM the selected replica and compare actual files to primary digest.
@@ -86,10 +111,10 @@ def verify_replica_restore(engine: Any, *, snapshot_id: str, replica_name: str,
         raise ReplicaVerificationError("primary recovery point is not verified and clean")
     if not isinstance(point.get("manifest_sha256"), str) or len(point["manifest_sha256"]) != 64:
         raise ReplicaVerificationError("recovery point is missing an authenticated manifest digest")
-    # Validate untrusted catalog paths before touching any recovery staging area.
-    _restored_source(Path("/tmp/immutavault-path-check"), point.get("source_path"))
-    replica = engine._replica(replica_name)
     try:
+        # Treat both catalog metadata and restored files as untrusted input.
+        _restored_source(Path("/tmp/immutavault-path-check"), point.get("source_path"))
+        replica = engine._replica(replica_name)
         health = engine.repo.replica_health(replica)
         if not health.get("ok"):
             raise ReplicaVerificationError("replica target health check failed")
@@ -103,6 +128,13 @@ def verify_replica_restore(engine: Any, *, snapshot_id: str, replica_name: str,
             expected = _restored_source(root, point["source_path"])
             if not expected.is_dir() or expected.is_symlink():
                 raise ReplicaVerificationError("restored recovery point directory is missing or unsafe")
+            relative = expected.relative_to(root)
+            current = root
+            for component in relative.parts:
+                current = current / component
+                if current.is_symlink():
+                    raise ReplicaVerificationError("restored source includes an unsafe symbolic link")
+            _ensure_safe_manifest(expected)
             ok, errors = verify_manifest(expected, expected_digest=point["manifest_sha256"])
             if not ok:
                 raise ReplicaVerificationError("restored replica manifest did not verify: " +
