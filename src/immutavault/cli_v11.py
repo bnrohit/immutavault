@@ -66,7 +66,7 @@ def _run_management(argv: list[str]) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
-    if _command_name(args) in {"migration-discover", "migration-plan", "migration-request"}:
+    if _command_name(args) in {"migration-discover", "migration-plan", "migration-request", "migration-stage"}:
         from .migration_cli import main as migration_main
         return migration_main(args)
     if _command_name(args) in MANAGEMENT_COMMANDS:
