@@ -190,13 +190,19 @@ def verify_due_replica(engine: Any, *, replica_name: str, actor: str,
     engine._replica(replica_name)  # fail on disabled/unknown replicas
     budget = max_backup_gib * 2**30
     skipped_oversized = 0
+    missing_copies = 0
+    scanned_points = 0
     due = 0
     for point in engine.state.list_points(limit=point_limit):
         if not point.get("verified") or point.get("suspicious"):
             continue
+        scanned_points += 1
         sid = str(point["snapshot_id"])
         copy = engine.state.get_recovery_copy(sid, replica_name)
-        if not copy or copy.get("status") != "success" or replica_copy_ready(copy):
+        if not copy or copy.get("status") != "success":
+            missing_copies += 1
+            continue
+        if replica_copy_ready(copy):
             continue
         due += 1
         size = point.get("backup_bytes")
@@ -213,8 +219,12 @@ def verify_due_replica(engine: Any, *, replica_name: str, actor: str,
             engine, snapshot_id=sid, replica_name=replica_name, actor=actor)
         return {**result, "status": "VERIFIED_ONE", "max_backup_gib": max_backup_gib}
     return {
-        "status": "NO_ELIGIBLE_COPY" if due else "UP_TO_DATE",
-        "replica": replica_name, "due": due, "skipped_oversized_or_unknown": skipped_oversized,
+        "status": ("NO_BACKUPS" if not scanned_points else
+                   "NO_ELIGIBLE_COPY" if due else
+                   "INCOMPLETE_COVERAGE" if missing_copies else "UP_TO_DATE"),
+        "replica": replica_name, "due": due,
+        "missing_or_failed_copies": missing_copies,
+        "skipped_oversized_or_unknown": skipped_oversized,
         "hypervisor_changes": False,
         "warning": "oversized/unknown copies still require separate, capacity-approved readback",
     }
