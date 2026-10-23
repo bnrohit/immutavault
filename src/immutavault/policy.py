@@ -55,7 +55,7 @@ class ProtectionPolicyRunner:
             raise RuntimeError(f"protection policy {policy.id} is disabled")
         engine = CertifiedBackupEngine(_PolicyConfigView(self.cfg, policy))
         results = engine.backup_all(dry_run=dry_run)
-        failed = [row for row in results if row.get("status") == "failed"]
+        failed = [row for row in results if row.get("status") in {"failed", "degraded"}]
         detail = {
             "policy_id": policy.id,
             "policy_name": policy.name,
@@ -64,6 +64,7 @@ class ProtectionPolicyRunner:
             "replica_targets": list(policy.replica_targets),
             "results": results,
             "failed": len(failed),
+            "degraded": sum(row.get("status") == "degraded" for row in results),
         }
         if not dry_run:
             engine.state.audit(
