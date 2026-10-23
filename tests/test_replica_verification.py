@@ -57,7 +57,7 @@ class State:
         self.events = []
     def get_point(self, _id):
         return {"verified": 1, "suspicious": 0, "manifest_sha256": self.digest,
-                "source_path": "/srv/backups/pilot"}
+                "source_path": "/srv/backups/pilot", "backup_bytes": 8}
     def get_recovery_copy(self, snapshot, name):
         return {"status": "success"}
     def mark_copy_verified(self, snapshot, name, verified, error=None):
@@ -140,3 +140,13 @@ def test_manifest_symlink_denied(tmp_path):
         json.dumps({"files": [{"path": "safe/file.txt", "size": 1}]}))
     with pytest.raises(ReplicaVerificationError):
         _ensure_safe_manifest(root)
+
+
+def test_unbounded_replica_readback_is_blocked(tmp_path):
+    engine = Engine(tmp_path)
+    original = engine.state.get_point
+    engine.state.get_point = lambda sid: {**original(sid), "backup_bytes": 0}
+    with pytest.raises(ReplicaVerificationError):
+        verify_replica_restore(engine, snapshot_id="snap1",
+                               replica_name="offsite", actor="operator")
+    assert engine.state.status is False
