@@ -240,6 +240,7 @@ def plan_migration(source: dict[str, Any], destination: dict[str, Any],
                       and chosen_host in t_net["accessible_hosts"])
             nic_pass &= exists
             mapped_nics.append({"source_network": src_net, "target_network": to,
+                                "device": nic.get("device"),
                                 "vlan": s_net["vlan"] if s_net else None, "valid": bool(exists)})
         _check(row_checks, "exact_network_mapping", nic_pass and bool(mapped_nics),
                "all NICs require same-VLAN, host-accessible destination network mapping")
@@ -317,12 +318,18 @@ def create_restore_request(plan: dict[str, Any], vm_id: str, *, engine: Any,
         raise PermissionError("source recovery point is not verified and clean")
     if not getattr(engine.cfg.protection, "require_four_eyes_restore", False):
         raise PermissionError("migration requires four-eyes restore approval to be enabled")
+    options: dict[str, str] = {"migration_plan_sha256": plan["plan_sha256"]}
+    if plan["destination_family"] == "xcpng":
+        target_srs = {disk.get("target_sr") for disk in row["disks"]}
+        if len(target_srs) != 1 or not all(isinstance(sr, str) for sr in target_srs):
+            raise PermissionError("XCP-ng staged restore requires exactly one mapped destination SR")
+        options["sr_uuid"] = next(iter(target_srs))
     request_id = engine.request_restore(
         snapshot_id=row["snapshot_id"],
         requester=requester,
         target_platform=plan["destination_platform"],
         target_name=row["target_name"],
-        options={"migration_plan_sha256": plan["plan_sha256"]},
+        options=options,
     )
     engine.state.audit(requester, "migration.restore.requested", "restore_request", str(request_id),
                        {"plan_sha256": plan["plan_sha256"], "source_vm_id": vm_id,
