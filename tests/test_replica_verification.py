@@ -9,7 +9,7 @@ import pytest
 from immutavault.integrity import build_manifest
 from immutavault.replica_verification import (
     ReplicaVerificationError, _restored_source, _ensure_safe_manifest,
-    replica_copy_ready, verify_replica_restore,
+    replica_copy_ready, verify_replica_restore, verify_due_replica,
 )
 
 
@@ -150,3 +150,58 @@ def test_unbounded_replica_readback_is_blocked(tmp_path):
         verify_replica_restore(engine, snapshot_id="snap1",
                                replica_name="offsite", actor="operator")
     assert engine.state.status is False
+
+
+def test_bounded_scheduler_preview_does_not_read_bytes(tmp_path):
+    engine = Engine(tmp_path)
+    engine.state.list_points = lambda limit: [
+        {"snapshot_id": "snap1", "verified": 1, "suspicious": 0,
+         "backup_bytes": 8}]
+    report = verify_due_replica(engine, replica_name="offsite", actor="scheduled",
+                                execute=False, max_backup_gib=1)
+    assert report["status"] == "DRY_RUN"
+    assert engine.state.status is None
+
+
+def test_bounded_scheduler_verifies_one_copy(tmp_path):
+    engine = Engine(tmp_path)
+    engine.state.list_points = lambda limit: [
+        {"snapshot_id": "snap1", "verified": 1, "suspicious": 0,
+         "backup_bytes": 8}]
+    report = verify_due_replica(engine, replica_name="offsite", actor="scheduled",
+                                execute=True, max_backup_gib=1)
+    assert report["status"] == "VERIFIED_ONE"
+    assert engine.state.status is True
+
+
+def test_scheduler_never_reads_over_budget(tmp_path):
+    engine = Engine(tmp_path)
+    engine.state.list_points = lambda limit: [
+        {"snapshot_id": "snap1", "verified": 1, "suspicious": 0,
+         "backup_bytes": 20 * 2**30}]
+    report = verify_due_replica(engine, replica_name="offsite", actor="scheduled",
+                                execute=True, max_backup_gib=1)
+    assert report["status"] == "NO_ELIGIBLE_COPY"
+    assert report["skipped_oversized_or_unknown"] == 1
+    assert engine.state.status is None
+
+
+def test_scheduler_detects_missing_replica_copy(tmp_path):
+    engine = Engine(tmp_path)
+    engine.state.list_points = lambda limit: [
+        {"snapshot_id": "snap1", "verified": 1, "suspicious": 0,
+         "backup_bytes": 8}]
+    engine.state.get_recovery_copy = lambda *args: None
+    report = verify_due_replica(engine, replica_name="offsite", actor="scheduled",
+                                execute=True, max_backup_gib=1)
+    assert report["status"] == "INCOMPLETE_COVERAGE"
+    assert report["missing_or_failed_copies"] == 1
+    assert engine.state.status is None
+
+
+def test_scheduler_no_points_is_not_up_to_date(tmp_path):
+    engine = Engine(tmp_path)
+    engine.state.list_points = lambda limit: []
+    report = verify_due_replica(engine, replica_name="offsite", actor="scheduled",
+                                execute=False)
+    assert report["status"] == "NO_BACKUPS"
