@@ -62,6 +62,8 @@ class XCPNGMigrationStager:
             raise StagingBlocked("unknown restore request")
         if req.get("status") != "approved":
             raise StagingBlocked("migration staging requires separately approved restore request")
+        if not req.get("approved_by") or req.get("approved_by") == req.get("requester"):
+            raise StagingBlocked("migration staging requires a different recorded four-eyes approver")
         if not self.engine.cfg.protection.require_four_eyes_restore:
             raise StagingBlocked("four-eyes approval must be enforced")
         options = json.loads(req.get("options_json") or "{}")
@@ -100,6 +102,14 @@ class XCPNGMigrationStager:
         hosts = self._list("xe host-list params=uuid --minimal")
         if _uuid(row["destination_host"], "destination host") not in hosts:
             raise StagingBlocked("planned destination host is missing")
+        target_host = _uuid(row["destination_host"], "destination host")
+        if self._param("host", target_host, "enabled").lower() != "true":
+            raise StagingBlocked("planned destination host is disabled")
+        free_ram = self._param("host", target_host, "memory-free")
+        needed_ram = row.get("memory_bytes")
+        if (not free_ram.isdigit() or type(needed_ram) is not int or needed_ram <= 0
+                or int(free_ram) < needed_ram * 120 // 100):
+            raise StagingBlocked("target host does not have enough live free RAM with 20% reserve")
         attached_hosts = set()
         for pbd in self._list(f"xe pbd-list sr-uuid={shlex.quote(sr)} params=uuid --minimal"):
             host = self._param("pbd", _uuid(pbd, "PBD"), "host-uuid")
