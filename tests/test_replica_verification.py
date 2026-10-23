@@ -68,12 +68,14 @@ class State:
 class Repo:
     def __init__(self, *, corrupt=False):
         self.corrupt = corrupt
+        self.manifest_text = ""
     def replica_health(self, replica):
         return {"ok": True}
     def restore(self, snapshot, root, *, replica):
         dest = Path(root) / "srv/backups/pilot"
         dest.mkdir(parents=True)
         (dest / "data.txt").write_text("changed" if self.corrupt else "verified")
+        (dest / ".immutavault-manifest.json").write_text(self.manifest_text)
 
 
 class Engine:
@@ -85,6 +87,7 @@ class Engine:
         original.mkdir()
         (original / "data.txt").write_text("verified")
         _, self.state.digest = build_manifest(original)
+        self.repo.manifest_text = (original / ".immutavault-manifest.json").read_text()
     def _replica(self, name):
         return SimpleNamespace(name=name)
     def _ensure_path_capacity(self, *args, **kwargs):
