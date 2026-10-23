@@ -13,7 +13,7 @@ from .migration_discovery import discover
 from .migration_workflow import read_json, plan_migration, create_restore_request
 
 
-COMMANDS = {"migration-discover", "migration-plan", "migration-request"}
+COMMANDS = {"migration-discover", "migration-plan", "migration-request", "migration-stage"}
 
 
 def parser() -> argparse.ArgumentParser:
@@ -34,6 +34,13 @@ def parser() -> argparse.ArgumentParser:
     req.add_argument("--requester", required=True)
     req.add_argument("--execute-request", action="store_true",
                      help="actually create a restore request; does NOT create/power on a VM")
+    stage = sub.add_parser("migration-stage", help="restore NEW powered-off XCP-ng VM only after four-eyes approval")
+    for s in ("source", "destination", "selection", "plan"):
+        stage.add_argument("--" + s, required=True)
+    stage.add_argument("--request-id", required=True, type=int)
+    stage.add_argument("--actor", required=True)
+    stage.add_argument("--execute-stage", action="store_true",
+                       help="explicitly restore and map powered-off NEW XCP-ng target VM")
     return p
 
 
@@ -75,13 +82,21 @@ def main(argv: list[str] | None = None) -> int:
                 _write_new(args.output, result)
             print(json.dumps(result, sort_keys=True, indent=2))
             return 0 if result["ready_for_operator_review"] else 1
-        if args.command == "migration-request":
+        if args.command in {"migration-request", "migration-stage"}:
             fresh = _plan(args)
             saved = read_json(args.plan)
             if fresh["plan_sha256"] != saved.get("plan_sha256"):
                 raise PermissionError("migration plan changed/stale; create a new plan and review again")
             if not fresh["ready_for_operator_review"]:
                 raise PermissionError("migration plan is blocked")
+            if args.command == "migration-stage":
+                from .portal_v11_final import ManagedRecoveryEngine
+                from .migration_stage import XCPNGMigrationStager
+                engine = ManagedRecoveryEngine(load_v11_config(args.config))
+                result = XCPNGMigrationStager(engine, fresh).stage(
+                    args.request_id, actor=args.actor, execute=args.execute_stage)
+                print(json.dumps(result, indent=2))
+                return 0
             if not args.execute_request:
                 print(json.dumps({"dry_run": True, "vm_id": args.vm_id, "plan_sha256": fresh["plan_sha256"],
                                   "no_changes": True,
