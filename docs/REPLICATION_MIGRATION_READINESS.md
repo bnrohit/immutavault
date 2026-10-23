@@ -60,31 +60,32 @@ The verifier does **not** create any VM or verify VM bootability. It does not
 prove provider-side S3 Object Lock/WORM, SAN multipath, physical isolation,
 application consistency or guest functionality. Test these separately.
 
-## GMCS cluster migration acceptance
+## Cluster migration acceptance (public, vendor-neutral)
 
-1. Ensure new XCP-ng cluster `xcpng154/155/156` is reachable independently
-   from the old `nocpool-fc640` production cluster; do not relocate XOCE.
-2. Present **new separate** Compellent storage only to the new pool, with the
-   intended shared SR visible on all three hosts and supported multipathing
-   fully tested. A successful iSCSI TCP session without a LUN is a STOP.
-3. Verify read/write VLAN inventory, VLAN 1 native mapping, LACP Po154/155/156,
-   dedicated iSCSI VLAN248/249, and each VM's guest NIC identity. Treat the
-   broker SPAN NIC, NAC01 multihoming and NFS host as exceptional.
-4. Verify VMware `Po151/Po152/Po153` member ports, vDS lag1, distributed
-   port groups and iSCSI VLANs; current baseline includes MTU9000 on vmk0/1/2.
-5. Validate source VM firmware, secure boot/TPM, guest agents, application
-   quiescence and storage/CPU/memory capacity. Unknown or unverified fields
-   block the migration planner.
-6. Run and verify a fresh immutable backup, including a *separate*
-   replica restore-verification for any required DR copy.
-7. Restore a disposable pilot to a new name on an isolated VLAN, boot and
-   check the application, then destroy only the disposable pilot.
-8. Sign off an application-aware final-sync/fencing order. **Never boot
-   target alongside a writable production source using same IP/MAC.**
-9. Demonstrate rollback, including the path to re-enable original source
-   without losing writes or causing duplicate AD/DNS/DHCP services.
-10. Require operations, application owner and security signoffs before the
-    migration is labeled production certified.
+1. Ensure the new target cluster is reachable independently from the old
+   production cluster; do not relocate the backup/migration control plane.
+2. Present **new separate** SAN storage to the target pool, ensure a real
+   shared SR is visible on all hosts, and test supported multipathing. A
+   successful iSCSI session without a LUN is a STOP.
+3. Verify switch trunking, link aggregation, dedicated storage networks,
+   native VLAN semantics and each guest's NIC identity. Treat SPAN ports,
+   NAC appliances and multihomed file servers as special workloads.
+4. Validate VMware distributed switch LAGs and port groups, dedicated iSCSI
+   storage networks and end-to-end MTU, according to the site's private baseline.
+5. Validate firmware, secure boot/TPM, guest agents, application quiescence,
+   hardware/CPU compatibility and destination resource capacity.
+6. Verify a fresh immutable primary backup; independently restore a selected
+   replica copy and verify its manifest when the DR copy is required.
+7. Restore an isolated disposable pilot under a new name, boot and check the
+   application, then clean up only the disposable test.
+8. Sign off an application-consistent final synchronization and fencing order.
+   **Never boot target beside a writable source with duplicate IP/MAC.**
+9. Test rollback, retaining original production workloads until signoff.
+10. Require separate operations, application owner and security acceptance.
+
+Store **site-specific VLANs, IPs, hostnames, switch ports, serial numbers,
+credentials, backup recovery IDs and SAN mappings in a private runbook**, never
+in this public repository.
 
 ## Failure test matrix
 
