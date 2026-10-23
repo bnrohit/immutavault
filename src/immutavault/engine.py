@@ -211,8 +211,7 @@ class BackupEngine:
                 repository=self.cfg.repository.url, status="success", immutable_until=immutable_until,
                 object_lock={"type": "append-only-vault", "logical_immutability": True},
             )
-            self.state.finish_job(job_id, status="success", snapshot_id=summary.snapshot_id)
-            self.state.audit("system", "backup.complete", "recovery_point", summary.snapshot_id, {
+            self.state.audit("system", "backup.primary_complete", "recovery_point", summary.snapshot_id, {
                 "platform": platform.name, "vm": vm.name, "suspicious": suspicious, "reason": reason,
             })
 
@@ -253,11 +252,22 @@ class BackupEngine:
                 verified = self.verify_recovery_point(summary.snapshot_id, actor="system")
             else:
                 verified = None
+            degraded_replicas = sorted(name for name, row in replica_results.items()
+                                       if row.get("status") != "success")
+            degraded = bool(degraded_replicas) or verified is False
+            job_status = "degraded" if degraded else "success"
+            self.state.finish_job(job_id, status=job_status, snapshot_id=summary.snapshot_id,
+                                  error=("replica/verification incomplete" if degraded else None))
+            if degraded:
+                self.state.audit("system", "backup.degraded", "recovery_point", summary.snapshot_id,
+                                 {"replicas_failed": degraded_replicas,
+                                  "primary_backup_preserved": True,
+                                  "primary_restore_verified": verified})
             shutil.rmtree(staging_root, ignore_errors=True)
             return {
                 "platform": platform.name,
                 "vm": vm.name,
-                "status": "success",
+                "status": job_status,
                 "snapshot": summary.snapshot_id,
                 "bytes": int(manifest["total_bytes"]),
                 "data_added": summary.data_added,
