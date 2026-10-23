@@ -78,7 +78,7 @@ def _ensure_safe_manifest(root: Path) -> None:
         if not isinstance(entry, dict):
             raise ReplicaVerificationError("restored manifest contains invalid entries")
         name = entry.get("path")
-        if not isinstance(name, str) or not name or name.startswith("/") or "\\x00" in name:
+        if not isinstance(name, str) or not name or name.startswith("/") or chr(0) in name:
             raise ReplicaVerificationError("restored manifest contains unsafe file path")
         if any(part in ("", ".", "..") for part in name.split("/")):
             raise ReplicaVerificationError("restored manifest contains traversal path")
