@@ -14,6 +14,7 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 from .integrity import verify_manifest
+from .lock import exclusive_lock
 
 
 class ReplicaVerificationError(RuntimeError):
@@ -126,27 +127,28 @@ def verify_replica_restore(engine: Any, *, snapshot_id: str, replica_name: str,
         expected_bytes = point.get("backup_bytes")
         if type(expected_bytes) is not int or expected_bytes <= 0:
             raise ReplicaVerificationError("backup size not recorded; refuse unbounded readback")
-        free_bytes = shutil.disk_usage(base).free
-        reserve = max(512 * 2**20, expected_bytes // 5)
-        if free_bytes < expected_bytes + reserve:
-            raise ReplicaVerificationError("not enough private staging capacity for replica readback")
-        with TemporaryDirectory(prefix="replica-verify-", dir=base) as temp:
-            root = Path(temp)
-            engine.repo.restore(snapshot_id, str(root), replica=replica)
-            expected = _restored_source(root, point["source_path"])
-            if not expected.is_dir() or expected.is_symlink():
-                raise ReplicaVerificationError("restored recovery point directory is missing or unsafe")
-            relative = expected.relative_to(root)
-            current = root
-            for component in relative.parts:
-                current = current / component
-                if current.is_symlink():
-                    raise ReplicaVerificationError("restored source includes an unsafe symbolic link")
-            _ensure_safe_manifest(expected)
-            ok, errors = verify_manifest(expected, expected_digest=point["manifest_sha256"])
-            if not ok:
-                raise ReplicaVerificationError("restored replica manifest did not verify: " +
-                                               "; ".join(errors[:3]))
+        with exclusive_lock(str(base / ".replica-verify.lock")):
+            free_bytes = shutil.disk_usage(base).free
+            reserve = max(512 * 2**20, expected_bytes // 5)
+            if free_bytes < expected_bytes + reserve:
+                raise ReplicaVerificationError("not enough private staging capacity for replica readback")
+            with TemporaryDirectory(prefix="replica-verify-", dir=base) as temp:
+                root = Path(temp)
+                engine.repo.restore(snapshot_id, str(root), replica=replica)
+                expected = _restored_source(root, point["source_path"])
+                if not expected.is_dir() or expected.is_symlink():
+                    raise ReplicaVerificationError("restored recovery point directory is missing or unsafe")
+                relative = expected.relative_to(root)
+                current = root
+                for component in relative.parts:
+                    current = current / component
+                    if current.is_symlink():
+                        raise ReplicaVerificationError("restored source includes an unsafe symbolic link")
+                _ensure_safe_manifest(expected)
+                ok, errors = verify_manifest(expected, expected_digest=point["manifest_sha256"])
+                if not ok:
+                    raise ReplicaVerificationError("restored replica manifest did not verify: " +
+                                                   "; ".join(errors[:3]))
         engine.state.mark_copy_verified(snapshot_id, replica_name, True)
         engine.state.audit(actor, "replica.restore_verified", "recovery_copy",
                            snapshot_id + ":" + replica_name,
