@@ -40,7 +40,7 @@ def main(argv: list[str] | None = None) -> int:
                                         max_backup_gib=args.max_backup_gib,
                                         execute=args.execute_readback)
             print(json.dumps(report, indent=2))
-            return 1 if report["status"] == "NO_ELIGIBLE_COPY" else 0
+            return 0 if report["status"] in {"DRY_RUN", "VERIFIED_ONE", "UP_TO_DATE"} else 1
         if args.command == "replica-coverage":
             if not 1 <= args.limit <= 1000:
                 raise ValueError("limit must be from 1 to 1000")
