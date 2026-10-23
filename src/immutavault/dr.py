@@ -14,6 +14,7 @@ from .dr_config import DRVMConfig
 from .dr_network import DRNetworkManager
 from .health import run_health_checks
 from .runner import run
+from .replica_verification import replica_copy_ready
 
 
 class DROrchestrator:
@@ -65,7 +66,7 @@ class DROrchestrator:
             row.update({
                 "snapshot_id": point["snapshot_id"], "created_at": point["created_at"], "rpo_minutes": rpo,
                 "verified": bool(point["verified"]), "suspicious": bool(point["suspicious"]),
-                "replica_ready": bool(copy and copy.get("status") == "success"),
+                "replica_ready": replica_copy_ready(copy),
                 "replica": self.cfg.replica,
             })
             if not point["verified"]:
@@ -75,7 +76,7 @@ class DROrchestrator:
             if rpo > self.cfg.rpo_max_minutes:
                 errors.append(f"{workload.name}: latest point is {rpo} minutes old; DR RPO limit is {self.cfg.rpo_max_minutes}")
             if not row["replica_ready"]:
-                errors.append(f"{workload.name}: latest point is not present on DR replica {self.cfg.replica}")
+                errors.append(f"{workload.name}: latest point has no recent verified restore from DR replica {self.cfg.replica}")
             rows.append(row)
         return {
             "ready": not errors, "primary_site": self.cfg.primary_site, "dr_site": self.cfg.dr_site,
