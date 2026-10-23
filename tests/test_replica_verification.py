@@ -8,7 +8,8 @@ import pytest
 
 from immutavault.integrity import build_manifest
 from immutavault.replica_verification import (
-    ReplicaVerificationError, _restored_source, replica_copy_ready, verify_replica_restore,
+    ReplicaVerificationError, _restored_source, _ensure_safe_manifest,
+    replica_copy_ready, verify_replica_restore,
 )
 
 
@@ -117,3 +118,25 @@ def test_explicit_actor_required(tmp_path):
     engine = Engine(tmp_path)
     with pytest.raises(ReplicaVerificationError):
         verify_replica_restore(engine, snapshot_id="snap1", replica_name="offsite", actor="")
+
+
+@pytest.mark.parametrize("bad", ["../secret", "/etc/shadow", "folder/../secret", "folder//secret"])
+def test_manifest_traversal_denied(tmp_path, bad):
+    root = tmp_path / "restored"
+    root.mkdir()
+    import json
+    (root / ".immutavault-manifest.json").write_text(
+        json.dumps({"files": [{"path": bad, "size": 1}]}))
+    with pytest.raises(ReplicaVerificationError):
+        _ensure_safe_manifest(root)
+
+
+def test_manifest_symlink_denied(tmp_path):
+    import json
+    root = tmp_path / "restored"
+    root.mkdir()
+    (root / "safe").symlink_to(tmp_path, target_is_directory=True)
+    (root / ".immutavault-manifest.json").write_text(
+        json.dumps({"files": [{"path": "safe/file.txt", "size": 1}]}))
+    with pytest.raises(ReplicaVerificationError):
+        _ensure_safe_manifest(root)
