@@ -271,6 +271,7 @@ def plan_migration(source: dict[str, Any], destination: dict[str, Any],
                "application-consistency requirements need explicit validation")
         results.append({
             "source_vm_id": vm_id, "source_name": vm["name"],
+            "memory_bytes": mem,
             "source_power_state": vm.get("power_state", "unknown"),
             "target_name": target_name, "destination_host": chosen_host,
             "nics": mapped_nics, "disks": mapped_disks,
