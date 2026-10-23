@@ -60,6 +60,56 @@ The verifier does **not** create any VM or verify VM bootability. It does not
 prove provider-side S3 Object Lock/WORM, SAN multipath, physical isolation,
 application consistency or guest functionality. Test these separately.
 
+## Opt-in daily replica verification (experimental)
+
+The worker performs **at most one readback per run**, uses the newest
+unverified successful copy, and applies a per-VM uncompressed backup-size
+limit. Large or unknown snapshots remain **unverified** and are reported as
+requiring a separately approved high-capacity restore test.
+
+```bash
+# Preview which recovery point would be read (no readback)
+sudo immutavault --config /etc/immutavault/immutavault.yml \
+  replica-verify-due --name YOUR_REPLICA --actor operator \
+  --max-backup-gib 100
+
+# Run an explicitly approved single readback
+sudo immutavault --config /etc/immutavault/immutavault.yml \
+  replica-verify-due --name YOUR_REPLICA --actor operator \
+  --max-backup-gib 100 --execute-readback
+```
+
+The following systemd timer/service templates are included but never
+automatically enabled:
+
+- `systemd/immutavault-replica-verify@.service`
+- `systemd/immutavault-replica-verify@.timer`
+
+Only after the operator verifies service identity permissions, temporary disk
+capacity, replica credentials, bandwidth limits and acceptable readback window:
+
+```bash
+sudo cp systemd/immutavault-replica-verify@.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now immutavault-replica-verify@YOUR_REPLICA.timer
+sudo systemctl list-timers 'immutavault-replica-verify@*'
+```
+
+For high-capacity VM backups, provide a dedicated verification controller and
+raise the per-run size cap **only after** confirming filesystem capacity and
+network bandwidth. A passing scheduled readback is still not a successful
+isolated VM boot or application recovery test. Schedule a distinct DR drill.
+
+## Migration operator summary
+
+```bash
+immutavault --config /etc/immutavault/immutavault.yml \
+  migration-summary --plan private-reviewed-plan.json
+```
+
+The summary verifies the saved plan's SHA-256 fingerprint, displays blocked
+VMs and remediation actions, and never grants execution approval.
+
 ## Cluster migration acceptance (public, vendor-neutral)
 
 1. Ensure the new target cluster is reachable independently from the old
