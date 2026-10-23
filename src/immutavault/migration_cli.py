@@ -13,13 +13,33 @@ from .migration_discovery import discover
 from .migration_workflow import read_json, plan_migration, create_restore_request
 
 
-COMMANDS = {"migration-discover", "migration-plan", "migration-request", "migration-stage", "migration-summary"}
+COMMANDS = {"migration-discover", "migration-plan", "migration-request", "migration-stage", "migration-summary", "migration-optimize", "migration-request-batch"}
 
 
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="immutavault", description="Cluster migration planning (safe defaults)")
     p.add_argument("--config", default="/etc/immutavault/immutavault.yml")
     sub = p.add_subparsers(dest="command", required=True)
+    opt = sub.add_parser("migration-optimize", help="dry-run migration stage waves, shared bandwidth and bottlenecks")
+    opt.add_argument("--plan", required=True, help="immutable, reviewed plan JSON")
+    opt.add_argument("--output", help="new JSON output; existing files are never overwritten")
+    opt.add_argument("--effective-mib-per-second", type=int, default=100,
+                     help="measured aggregate MiB/s across all simultaneous transfers")
+    opt.add_argument("--max-parallel", type=int, default=2)
+    opt.add_argument("--max-per-host", type=int, default=1)
+    opt.add_argument("--max-per-storage", type=int, default=1)
+    opt.add_argument("--stage-overhead-minutes", type=int, default=15)
+    opt.add_argument("--priorities", help="private JSON map: source VM ID -> integer 0..3")
+    opt.add_argument("--dependencies", help="private JSON map: VM ID -> prerequisite VM IDs")
+
+    batch = sub.add_parser("migration-request-batch", help="create separate restore requests; NEVER approve or migrate")
+    for s in ("source", "destination", "selection", "plan"):
+        batch.add_argument("--" + s, required=True)
+    batch.add_argument("--requester", required=True)
+    batch.add_argument("--max-new-requests", type=int, default=25)
+    batch.add_argument("--execute-requests", action="store_true",
+                       help="create individual pending requests; no hypervisor changes")
+
     summary = sub.add_parser("migration-summary", help="show concise, integrity-checked migration blockers")
     summary.add_argument("--plan", required=True, help="existing SHA256-bound migration plan JSON")
     d = sub.add_parser("migration-discover", help="read-only hypervisor inventory; not proof of live readiness")
@@ -68,6 +88,40 @@ def _plan(args: argparse.Namespace) -> dict[str, Any]:
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
+        if args.command == "migration-optimize":
+            from .migration_optimizer import optimize_migration_plan
+            result = optimize_migration_plan(
+                read_json(args.plan),
+                effective_mib_per_second=args.effective_mib_per_second,
+                max_parallel=args.max_parallel,
+                max_per_host=args.max_per_host,
+                max_per_storage=args.max_per_storage,
+                stage_overhead_minutes=args.stage_overhead_minutes,
+                priorities=read_json(args.priorities) if args.priorities else None,
+                dependencies=read_json(args.dependencies) if args.dependencies else None,
+            )
+            if args.output:
+                _write_new(args.output, result)
+            print(json.dumps(result, sort_keys=True, indent=2))
+            return 0
+        if args.command == "migration-request-batch":
+            from .migration_batch import create_migration_requests
+            fresh = _plan(args)
+            saved = read_json(args.plan)
+            if fresh["plan_sha256"] != saved.get("plan_sha256"):
+                raise PermissionError("migration plan changed/stale; generate and review a new plan")
+            if not args.execute_requests:
+                report = create_migration_requests(
+                    fresh, requester=args.requester,
+                    max_new_requests=args.max_new_requests)
+            else:
+                from .portal_v11_final import ManagedRecoveryEngine
+                engine = ManagedRecoveryEngine(load_v11_config(args.config))
+                report = create_migration_requests(
+                    fresh, engine=engine, requester=args.requester, execute=True,
+                    max_new_requests=args.max_new_requests)
+            print(json.dumps(report, indent=2))
+            return 1 if report.get("status") == "PARTIAL_FAILURE" else 0
         if args.command == "migration-summary":
             from .migration_reporting import summarize_migration_plan
             report = summarize_migration_plan(read_json(args.plan))
