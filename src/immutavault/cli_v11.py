@@ -66,7 +66,7 @@ def _run_management(argv: list[str]) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
-    if _command_name(args) in {"replica-verify", "replica-readiness"}:
+    if _command_name(args) in {"replica-verify", "replica-readiness", "replica-coverage"}:
         from .replica_cli import main as replica_main
         return replica_main(args)
     if _command_name(args) in {"migration-discover", "migration-plan", "migration-request", "migration-stage"}:
