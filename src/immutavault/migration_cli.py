@@ -132,6 +132,8 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(report, indent=2))
             return 1 if report.get("status") == "PARTIAL_FAILURE" else 0
         if args.command == "migration-request-batch":
+            if args.output and Path(args.output).exists():
+                raise FileExistsError("output file already exists; requests not created")
             from .migration_batch import create_migration_requests
             fresh = _plan(args)
             saved = read_json(args.plan)
