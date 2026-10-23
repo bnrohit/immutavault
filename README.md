@@ -1,5 +1,27 @@
 # Immutavault v1.1.0
 
+> **Development branch (not a production release):** v1.2 adds faster *operator*
+> workflows for future cluster migrations: `migration-optimize` plans capacity-
+> and storage-safe waves, `migration-request-batch` prepares up to 25 independently
+> approved restore requests with one command, and `migration-stage-batch` can
+> stage a limited sequence of separately approved XCP-ng targets **powered off**.
+> Replication readback verification and DR fail-closed protections are also
+> being developed. These tools do not yet provide warm/final-delta migration,
+> automatic cutover or production failback.
+>
+> Start with [Fast Migration Workflow](docs/FAST_MIGRATION_WORKFLOW.md),
+> [Cluster Migration](docs/CLUSTER_MIGRATION.md) and
+> [Production Readiness](docs/REPLICATION_MIGRATION_READINESS.md).
+
+> **Development-only cluster migration:** The feature/cluster-migration-planner
+> branch contains XCP-ng/VMware inventory discovery, conservative migration
+> readiness checks, existing four-eyes restore-request integration and
+> explicitly approved, powered-off XCP-ng staging. It is **not** a live/warm
+> migration engine, does **not** perform automatic production cutover, and
+> is not certified for production. See
+> [Cluster Migration](docs/CLUSTER_MIGRATION.md). The stable v1.1.0 tag is unchanged.
+
+
 Immutavault is an open, vendor-neutral **immutable VM backup, recovery, certified V2V conversion, file-level recovery, replication and disaster-recovery platform** for VMware/vCenter, Proxmox VE and XCP-ng.
 
 v1.1.0 is the **Unified Management & Appliance** release. It keeps the fail-closed V2V, immutable repository, tenant isolation, OIDC/MFA, FLR broker and target readiness controls from v1.0.1, while making normal deployment and day-2 operation substantially closer to a commercial backup appliance.
