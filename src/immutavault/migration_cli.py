@@ -35,6 +35,7 @@ def parser() -> argparse.ArgumentParser:
     batch = sub.add_parser("migration-request-batch", help="create separate restore requests; NEVER approve or migrate")
     for s in ("source", "destination", "selection", "plan"):
         batch.add_argument("--" + s, required=True)
+    batch.add_argument("--output", help="write a new mode-0600 JSON response usable by migration-stage-batch")
     batch.add_argument("--requester", required=True)
     batch.add_argument("--max-new-requests", type=int, default=25)
     batch.add_argument("--execute-requests", action="store_true",
@@ -146,6 +147,8 @@ def main(argv: list[str] | None = None) -> int:
                 report = create_migration_requests(
                     fresh, engine=engine, requester=args.requester, execute=True,
                     max_new_requests=args.max_new_requests)
+            if args.output:
+                _write_new(args.output, report)
             print(json.dumps(report, indent=2))
             return 1 if report.get("status") == "PARTIAL_FAILURE" else 0
         if args.command == "migration-summary":
