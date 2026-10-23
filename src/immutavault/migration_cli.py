@@ -13,13 +13,15 @@ from .migration_discovery import discover
 from .migration_workflow import read_json, plan_migration, create_restore_request
 
 
-COMMANDS = {"migration-discover", "migration-plan", "migration-request", "migration-stage"}
+COMMANDS = {"migration-discover", "migration-plan", "migration-request", "migration-stage", "migration-summary"}
 
 
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="immutavault", description="Cluster migration planning (safe defaults)")
     p.add_argument("--config", default="/etc/immutavault/immutavault.yml")
     sub = p.add_subparsers(dest="command", required=True)
+    summary = sub.add_parser("migration-summary", help="show concise, integrity-checked migration blockers")
+    summary.add_argument("--plan", required=True, help="existing SHA256-bound migration plan JSON")
     d = sub.add_parser("migration-discover", help="read-only hypervisor inventory; not proof of live readiness")
     d.add_argument("--platform", required=True, help="configured platform name")
     d.add_argument("--output", required=True, help="new JSON file (never overwritten)")
@@ -66,6 +68,11 @@ def _plan(args: argparse.Namespace) -> dict[str, Any]:
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
+        if args.command == "migration-summary":
+            from .migration_reporting import summarize_migration_plan
+            report = summarize_migration_plan(read_json(args.plan))
+            print(json.dumps(report, sort_keys=True, indent=2))
+            return 0 if report["status"] == "READY_FOR_OPERATOR_REVIEW" else 1
         if args.command == "migration-discover":
             cfg = load_v11_config(args.config)
             platform = next((p for p in cfg.platforms if p.name == args.platform and p.enabled), None)
