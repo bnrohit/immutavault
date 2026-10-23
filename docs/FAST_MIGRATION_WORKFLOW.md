@@ -104,18 +104,34 @@ immutavault --config /etc/immutavault/immutavault.yml \
 ```
 
 Only when the plan is reviewed and source recovery points verified, add
-`--execute-requests`. This creates **individual** pending restore requests
-for XCP-ng -> XCP-ng. The entire new batch is checked for clean verified
-recovery points before creating requests. The command deduplicates requests
-by exact target, backup snapshot and plan SHA-256. If a request creation
-fails midway, the earlier requests persist; rerunning skips them rather
-than automatically retrying existing requests with different approval state.
+`--execute-requests --output private-requests.json`. This creates
+**individual** pending restore requests for XCP-ng-to-XCP-ng and saves
+an operator-only mode-0600 request manifest. The entire new batch is checked
+for clean verified points first; request creation is idempotent when rerun
+with the same plan and destination name. No source or target VM is changed.
 
-Every request still requires its own approval by a different person. Follow
-`docs/CLUSTER_MIGRATION.md` to review and stage a **powered-off new target**.
-The scheduling output is advisory; there is no automatic wave executor,
-parallel-import engine, source power-off, final incremental sync, destination
-boot or production cutover.
+Every request still requires its **own separate approval** by another
+operator. After approvals, preview a capped sequential staging batch:
+
+```bash
+immutavault --config /etc/immutavault/immutavault.yml \
+  migration-stage-batch \
+  --source source.json --destination destination.json \
+  --selection selection.json --plan plan.json \
+  --requests-file private-requests.json --actor operator --max-jobs 5
+```
+
+The preview makes no changes. Only an explicit `--execute-stage-batch`
+performs **target-side powered-off imports**. Before any import, it
+revalidates *every selected request*. It then runs sequentially and stops
+on the first failure. It never automatically cleans up partial imports,
+powers on a target, shuts down a source, or changes production IP/MAC
+ownership. Do not rerun a request that already staged: inspect the target
+VM and edit your private request manifest deliberately.
+
+The wave optimizer is advisory. The batch stager does not yet launch
+parallel imports or perform final changed-block synchronization, source
+fencing, target production boot, rollback, or production cutover.
 
 ## Engineering roadmap for real elapsed-time reduction
 
