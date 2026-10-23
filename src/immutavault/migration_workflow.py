@@ -101,8 +101,8 @@ def validate_snapshot(snapshot: dict[str, Any], *, now: datetime | None = None,
             raise MigrationInputError(f"host {key}.healthy must be true/false")
     for key, net in networks.items():
         _text(net.get("name"), f"network {key}.name")
-        if type(net.get("vlan")) is not int or not 0 <= net["vlan"] <= 4094:
-            raise MigrationInputError(f"network {key}.vlan must be 0..4094 (0 = native)")
+        if type(net.get("vlan")) is not int or not -1 <= net["vlan"] <= 4094:
+            raise MigrationInputError(f"network {key}.vlan must be -1 (unknown), 0 (native), or 1..4094")
         _array(net.get("accessible_hosts"), f"network {key}.accessible_hosts")
     for key, sr in storage.items():
         _text(sr.get("name"), f"storage {key}.name")
@@ -225,6 +225,9 @@ def plan_migration(source: dict[str, Any], destination: dict[str, Any],
         specials = vm.get("special_devices", [])
         _check(row_checks, "special_devices_reviewed", specials == [],
                "passthrough, vTPM, SPAN, multi-homed or other special NICs require manual handling")
+        _check(row_checks, "destination_not_management_appliance",
+               vm["name"].casefold() not in {"xoce", "xoa", "immutavault"},
+               "migrate the migration management appliance only with a separate plan")
         # Each NIC is explicitly mapped, source and target VLAN tags must match.
         mapped_nics = []
         nic_pass = True
@@ -235,7 +238,7 @@ def plan_migration(source: dict[str, Any], destination: dict[str, Any],
             s_net = src["networks"].get(src_net)
             t_net = dst["networks"].get(to) if isinstance(to, str) else None
             exists = (s_net is not None and t_net is not None
-                      and s_net["vlan"] == t_net["vlan"]
+                      and s_net["vlan"] >= 0 and s_net["vlan"] == t_net["vlan"]
                       and chosen_host is not None
                       and chosen_host in t_net["accessible_hosts"])
             nic_pass &= exists
@@ -253,7 +256,7 @@ def plan_migration(source: dict[str, Any], destination: dict[str, Any],
             capacity = disk["size_bytes"]
             exists = (
                 target_sr is not None and target_sr["shared"] is True
-                and chosen_host is not None and chosen_host in target_sr["accessible_hosts"]
+                and chosen_host is not None and set(dst["hosts"]).issubset(set(target_sr["accessible_hosts"]))
                 and capacity > 0 and storage_remaining.get(to, 0) >= capacity
             )
             disk_pass &= exists
