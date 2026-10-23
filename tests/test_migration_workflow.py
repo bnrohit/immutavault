@@ -151,7 +151,7 @@ def test_insufficient_per_sr_capacity_blocks():
     {"schema_version": 2},
     {"captured_at": "2026-10-23T18:00:00"},
     {"hosts": []},
-    {"networks": [{"id": "bad", "name": "bad", "vlan": -1, "accessible_hosts": []}]},
+    {"networks": [{"id": "bad", "name": "bad", "vlan": -2, "accessible_hosts": []}]},
 ])
 def test_invalid_snapshot_fails_closed(bad):
     s, _, _ = snapshots()
@@ -208,3 +208,30 @@ def test_request_blocked_if_plan_not_ready():
     wrong["ready_for_operator_review"] = False
     with pytest.raises(PermissionError):
         create_restore_request(wrong, "uuid1", engine=FakeEngine(), requester="operator")
+
+
+def test_unverified_vlan_fails_in_plan_not_parse():
+    a, b, c = snapshots()
+    b["networks"][0]["vlan"] = -1
+    result = plan_migration(a, b, c, now=NOW)
+    assert not code(result, "exact_network_mapping")
+
+
+def test_shared_storage_must_reach_all_hosts():
+    a, b, c = snapshots()
+    b["storage"][0]["accessible_hosts"] = ["new154"]
+    result = plan_migration(a, b, c, now=NOW)
+    assert not code(result, "shared_storage_capacity")
+
+
+def test_management_appliance_blocked():
+    a, b, c = snapshots()
+    a["vms"][0]["name"] = "XOCE"
+    result = plan_migration(a, b, c, now=NOW)
+    assert not code(result, "destination_not_management_appliance")
+
+
+def test_restore_request_pins_target_sr():
+    engine = FakeEngine()
+    create_restore_request(plan(), "uuid1", engine=engine, requester="operator")
+    assert engine.calls[0]["options"]["sr_uuid"] == "new-sr"
