@@ -1,0 +1,60 @@
+"""Standalone replica validation CLI routed from the v1.1 command surface."""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+
+from .management_config import load_v11_config
+from .replica_verification import replica_copy_ready, verify_replica_restore
+
+COMMANDS = {"replica-verify", "replica-readiness"}
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="immutavault", description="Replica recovery checks")
+    parser.add_argument("--config", default="/etc/immutavault/immutavault.yml")
+    sub = parser.add_subparsers(dest="command", required=True)
+    verify = sub.add_parser("replica-verify", help="read replica, actually restore and verify bytes")
+    ready = sub.add_parser("replica-readiness", help="read-only recovery proof status")
+    for subcmd in (verify, ready):
+        subcmd.add_argument("--snapshot", required=True)
+        subcmd.add_argument("--name", required=True, help="configured non-primary replica")
+    verify.add_argument("--actor", required=True)
+    verify.add_argument("--execute-readback", action="store_true",
+                        help="perform a potentially large temporary readback; no hypervisor changes")
+    args = parser.parse_args(argv)
+    try:
+        from .portal_v11_final import ManagedRecoveryEngine
+        engine = ManagedRecoveryEngine(load_v11_config(args.config))
+        if args.command == "replica-verify":
+            if not args.execute_readback:
+                print(json.dumps({"dry_run": True, "snapshot_id": args.snapshot,
+                                  "replica": args.name, "hypervisor_changes": False,
+                                  "note": "add --execute-readback to restore and hash the replica copy"}, indent=2))
+                return 0
+            report = verify_replica_restore(
+                engine, snapshot_id=args.snapshot, replica_name=args.name, actor=args.actor)
+            print(json.dumps(report, indent=2))
+            return 0 if report["ok"] else 1
+        if args.command == "replica-readiness":
+            point = engine.state.get_point(args.snapshot)
+            copy = engine.state.get_recovery_copy(args.snapshot, args.name)
+            ready_flag = bool(point and point.get("verified") and not point.get("suspicious")
+                              and replica_copy_ready(copy))
+            print(json.dumps({"snapshot_id": args.snapshot, "replica": args.name,
+                              "ready": ready_flag,
+                              "backup_verified": bool(point and point.get("verified")),
+                              "backup_suspicious": bool(point and point.get("suspicious")),
+                              "replica_recently_restored_and_verified": replica_copy_ready(copy),
+                              "warning": "proof is a past restore, not a live cutover certification"}, indent=2))
+            return 0 if ready_flag else 1
+        return 2
+    except (OSError, ValueError, RuntimeError, PermissionError, KeyError, TypeError) as exc:
+        print("replica verification failed (" + type(exc).__name__ + "); inspect protected controller logs",
+              file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
