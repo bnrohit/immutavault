@@ -89,13 +89,42 @@ class XCPNGMigrationStager:
         sr = _uuid(row["disks"][0]["target_sr"], "destination SR")
         if self._param("sr", sr, "shared").lower() != "true":
             raise StagingBlocked("destination SR is no longer shared")
+        sr_type = self._param("sr", sr, "type")
+        if sr_type.lower() in {"iso", "udev", ""}:
+            raise StagingBlocked("target SR is not an eligible VM disk repository")
+        size = self._param("sr", sr, "physical-size")
+        used = self._param("sr", sr, "physical-utilisation")
+        needed = sum(int(d["size_bytes"]) for d in row["disks"])
+        if not size.isdigit() or not used.isdigit() or int(size) - int(used) < (needed * 120 // 100):
+            raise StagingBlocked("live shared SR free space is below planned disk size plus reserve")
         hosts = self._list("xe host-list params=uuid --minimal")
         if _uuid(row["destination_host"], "destination host") not in hosts:
             raise StagingBlocked("planned destination host is missing")
-        for network in {x["target_network"] for x in row["nics"]}:
-            network = _uuid(network, "destination network")
+        attached_hosts = set()
+        for pbd in self._list(f"xe pbd-list sr-uuid={shlex.quote(sr)} params=uuid --minimal"):
+            host = self._param("pbd", _uuid(pbd, "PBD"), "host-uuid")
+            attached = self._param("pbd", pbd, "currently-attached").lower() == "true"
+            if attached:
+                attached_hosts.add(host)
+        if not set(hosts).issubset(attached_hosts):
+            raise StagingBlocked("destination SR is not attached on every pool host")
+        for nic in row["nics"]:
+            network = _uuid(nic["target_network"], "destination network")
+            expected_vlan = nic.get("vlan")
+            if type(expected_vlan) is not int or not 0 <= expected_vlan <= 4094:
+                raise StagingBlocked("NIC has no verified VLAN")
             if self._list(f"xe network-list uuid={shlex.quote(network)} params=uuid --minimal") != [network]:
                 raise StagingBlocked("destination network is missing: " + network)
+            seen_hosts = set()
+            for pif in self._list(f"xe pif-list network-uuid={shlex.quote(network)} params=uuid --minimal"):
+                host = self._param("pif", _uuid(pif, "PIF"), "host-uuid")
+                attached = self._param("pif", pif, "currently-attached").lower() == "true"
+                tag = self._param("pif", pif, "VLAN")
+                vlan = 0 if tag == "-1" else int(tag) if tag.isdigit() else -1
+                if attached and vlan == expected_vlan:
+                    seen_hosts.add(host)
+            if not set(hosts).issubset(seen_hosts):
+                raise StagingBlocked("destination VLAN lacks verified PIF reachability on all pool hosts")
         # No destructive cleanup or automatic VM overwrite, even with same name.
         name = shlex.quote(row["target_name"])
         existing = self._list(f"xe vm-list name-label={name} params=uuid --minimal")
