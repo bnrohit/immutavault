@@ -13,6 +13,8 @@ SR = "3552d77f-20e5-d077-1779-ff4e64b587b8"
 NET = "4fdfc0aa-2cbf-7ede-1d87-0e4106da9236"
 VM = "68587bde-7630-4099-a642-2d48e235b493"
 VIF = "1ef711c6-d8f6-b143-dce1-71786e077717"
+PBD = "0a8a0bd1-16c4-4799-8ae9-555555555555"
+PIF = "0a8a0bd1-16c4-4799-8ae9-666666666666"
 
 
 def fake_plan():
@@ -24,7 +26,7 @@ def fake_plan():
             "source_vm_id": "source-uuid", "snapshot_id": "snapshot-id",
             "target_name": "migrated-pilot", "destination_host": HOST,
             "disks": [{"target_sr": SR, "size_bytes": 1024}],
-            "nics": [{"device": "0", "target_network": NET}],
+            "nics": [{"device": "0", "target_network": NET, "vlan": 2}],
             "ready_for_operator_review": True,
         }],
     }
@@ -73,7 +75,20 @@ def fake_run_factory(commands):
         elif remote.startswith("xe host-list"):
             output = HOST
         elif remote.startswith("xe sr-param-get"):
-            output = "true"
+            output = ("true" if "param-name=shared" in remote else
+                      "lvmoiscsi" if "param-name=type" in remote else
+                      str(1024 * 1024 * 1024) if "param-name=physical-size" in remote else
+                      "0" if "param-name=physical-utilisation" in remote else "UNKNOWN")
+        elif remote.startswith("xe pbd-list"):
+            output = PBD
+        elif remote.startswith("xe pbd-param-get"):
+            output = HOST if "param-name=host-uuid" in remote else "true"
+        elif remote.startswith("xe pif-list"):
+            output = PIF
+        elif remote.startswith("xe pif-param-get"):
+            output = (HOST if "param-name=host-uuid" in remote else
+                      "true" if "param-name=currently-attached" in remote else
+                      "2" if "param-name=VLAN" in remote else "UNKNOWN")
         elif remote.startswith("xe network-list"):
             output = NET
         elif remote.startswith("xe vm-list"):
