@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import shutil
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -122,6 +123,13 @@ def verify_replica_restore(engine: Any, *, snapshot_id: str, replica_name: str,
                                      action="replica verification")
         base = Path(engine.cfg.runtime.verify_staging_path)
         base.mkdir(parents=True, exist_ok=True)
+        expected_bytes = point.get("backup_bytes")
+        if type(expected_bytes) is not int or expected_bytes <= 0:
+            raise ReplicaVerificationError("backup size not recorded; refuse unbounded readback")
+        free_bytes = shutil.disk_usage(base).free
+        reserve = max(512 * 2**20, expected_bytes // 5)
+        if free_bytes < expected_bytes + reserve:
+            raise ReplicaVerificationError("not enough private staging capacity for replica readback")
         with TemporaryDirectory(prefix="replica-verify-", dir=base) as temp:
             root = Path(temp)
             engine.repo.restore(snapshot_id, str(root), replica=replica)
