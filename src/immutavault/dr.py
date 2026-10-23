@@ -143,6 +143,8 @@ class DROrchestrator:
                 errors.append(f"{workload.name}: no recovery point"); continue
             if point["suspicious"]:
                 errors.append(f"{workload.name}: latest point is suspicious and was not promoted to DR"); continue
+            if not point.get("verified"):
+                errors.append(f"{workload.name}: backup is unverified and cannot be copied for DR"); continue
             existing = self.engine.state.get_recovery_copy(str(point["snapshot_id"]), replica.name)
             if existing and existing.get("status") == "success":
                 copied.append({"workload": workload.name, "snapshot_id": point["snapshot_id"], "status": "already-present"}); continue
