@@ -13,7 +13,7 @@ from .migration_discovery import discover
 from .migration_workflow import read_json, plan_migration, create_restore_request
 
 
-COMMANDS = {"migration-discover", "migration-plan", "migration-request", "migration-stage", "migration-summary", "migration-optimize", "migration-request-batch"}
+COMMANDS = {"migration-discover", "migration-plan", "migration-request", "migration-stage", "migration-summary", "migration-optimize", "migration-request-batch", "migration-stage-batch"}
 
 
 def parser() -> argparse.ArgumentParser:
@@ -56,6 +56,16 @@ def parser() -> argparse.ArgumentParser:
     req.add_argument("--requester", required=True)
     req.add_argument("--execute-request", action="store_true",
                      help="actually create a restore request; does NOT create/power on a VM")
+    stage_batch = sub.add_parser("migration-stage-batch",
+                                 help="stage capped independently-approved XCP-ng restores sequentially")
+    for src in ("source", "destination", "selection", "plan"):
+        stage_batch.add_argument("--" + src, required=True)
+    stage_batch.add_argument("--requests-file", required=True,
+                             help="private JSON: {requests:[{source_vm_id,request_id}]}")
+    stage_batch.add_argument("--actor", required=True)
+    stage_batch.add_argument("--max-jobs", type=int, default=5)
+    stage_batch.add_argument("--execute-stage-batch", action="store_true",
+                             help="actual target-side powered-off imports; NO source changes or cutover")
     stage = sub.add_parser("migration-stage", help="restore NEW powered-off XCP-ng VM only after four-eyes approval")
     for s in ("source", "destination", "selection", "plan"):
         stage.add_argument("--" + s, required=True)
@@ -104,6 +114,22 @@ def main(argv: list[str] | None = None) -> int:
                 _write_new(args.output, result)
             print(json.dumps(result, sort_keys=True, indent=2))
             return 0
+        if args.command == "migration-stage-batch":
+            from .migration_stage_batch import stage_approved_batch
+            fresh = _plan(args)
+            saved = read_json(args.plan)
+            if fresh["plan_sha256"] != saved.get("plan_sha256"):
+                raise PermissionError("migration plan changed/stale; generate and review a new plan")
+            if args.execute_stage_batch:
+                from .portal_v11_final import ManagedRecoveryEngine
+                engine = ManagedRecoveryEngine(load_v11_config(args.config))
+            else:
+                engine = None
+            report = stage_approved_batch(
+                fresh, read_json(args.requests_file), actor=args.actor, engine=engine,
+                execute=args.execute_stage_batch, max_jobs=args.max_jobs)
+            print(json.dumps(report, indent=2))
+            return 1 if report.get("status") == "PARTIAL_FAILURE" else 0
         if args.command == "migration-request-batch":
             from .migration_batch import create_migration_requests
             fresh = _plan(args)
