@@ -58,7 +58,7 @@ def test_same_storage_serializes_even_on_different_hosts():
     plan = signed([vm(1), vm(2, host="host2")])
     out = optimize_migration_plan(plan, max_parallel=8)
     assert out["total_waves"] == 2
-    assert out["illustrative_saved_setup_seconds"] == 0
+    assert out["hypothetical_overhead_savings_seconds"] == 0
 
 
 def test_same_host_serializes_even_on_distinct_storage():
