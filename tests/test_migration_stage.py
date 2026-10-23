@@ -25,6 +25,7 @@ def fake_plan():
         "vms": [{
             "source_vm_id": "source-uuid", "snapshot_id": "snapshot-id",
             "target_name": "migrated-pilot", "destination_host": HOST,
+            "memory_bytes": 2 * 2**30,
             "disks": [{"target_sr": SR, "size_bytes": 1024}],
             "nics": [{"device": "0", "target_network": NET, "vlan": 2}],
             "ready_for_operator_review": True,
@@ -37,6 +38,7 @@ class State:
         self.events = []
         self.req = {
             "status": "approved", "snapshot_id": "snapshot-id",
+            "requester": "requester", "approved_by": "independent-reviewer",
             "target_name": "migrated-pilot", "target_platform": "target",
             "options_json": json.dumps({"migration_plan_sha256": "abc123", "sr_uuid": SR}),
         }
@@ -74,6 +76,8 @@ def fake_run_factory(commands):
             output = POOL
         elif remote.startswith("xe host-list"):
             output = HOST
+        elif remote.startswith("xe host-param-get"):
+            output = "true" if "param-name=enabled" in remote else str(8 * 2**30)
         elif remote.startswith("xe sr-param-get"):
             output = ("true" if "param-name=shared" in remote else
                       "lvmoiscsi" if "param-name=type" in remote else
@@ -151,4 +155,26 @@ def test_plan_drift_never_imports(monkeypatch):
     with pytest.raises(migration_stage.StagingBlocked):
         migration_stage.XCPNGMigrationStager(engine, fake_plan()).stage(
             5, actor="operator", execute=True)
+    assert engine.import_calls == 0
+
+def test_same_person_approval_is_blocked(monkeypatch):
+    monkeypatch.setattr(migration_stage, "build_adapter", lambda p, t: Adapter())
+    engine = Engine()
+    engine.state.req["approved_by"] = engine.state.req["requester"]
+    with pytest.raises(migration_stage.StagingBlocked, match="four-eyes"):
+        migration_stage.XCPNGMigrationStager(engine, fake_plan()).stage(
+            5, actor="executor", execute=True)
+    assert engine.import_calls == 0
+
+
+def test_insufficient_live_ram_blocks_import(monkeypatch):
+    commands = []
+    monkeypatch.setattr(migration_stage, "build_adapter", lambda p, t: Adapter())
+    monkeypatch.setattr(migration_stage, "run", fake_run_factory(commands))
+    engine = Engine()
+    plan = fake_plan()
+    plan["vms"][0]["memory_bytes"] = 16 * 2**30
+    with pytest.raises(migration_stage.StagingBlocked, match="RAM"):
+        migration_stage.XCPNGMigrationStager(engine, plan).stage(
+            5, actor="executor", execute=True)
     assert engine.import_calls == 0
