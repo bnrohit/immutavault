@@ -111,11 +111,20 @@ def create_migration_requests(
             created.append({"source_vm_id": row["source_vm_id"],
                             "request_id": result["request_id"],
                             "state": "pending_independent_approval"})
+        request_ids = {
+            entry["source_vm_id"]: entry["request_id"]
+            for entry in (*created, *skipped) if type(entry.get("request_id")) is int
+        }
+        reusable_requests = [
+            {"source_vm_id": row["source_vm_id"], "request_id": request_ids[row["source_vm_id"]]}
+            for row in vm_rows if row["source_vm_id"] in request_ids
+        ]
         return {
             "status": "PARTIAL_FAILURE" if failed else
                       "MORE_TO_REQUEST" if len(pending) > len(created) else "REQUESTED",
             "plan_sha256": plan["plan_sha256"],
             "created": created, "already_exists": skipped,
+            "requests": reusable_requests,
             "remaining_new_requests": len(pending) - len(created),
             "failed": failed, "approval_to_execute": False,
             "hypervisor_changes": False,
