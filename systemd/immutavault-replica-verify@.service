@@ -1,0 +1,30 @@
+[Unit]
+Description=Verify one bounded Immutavault replica snapshot from %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=immutavault
+Group=immutavault
+UMask=0077
+EnvironmentFile=/etc/immutavault/immutavault.env
+ExecStart=/usr/local/bin/immutavault --config /etc/immutavault/immutavault.yml replica-verify-due --name %i --actor scheduled-verifier --max-backup-gib 100 --execute-readback
+TimeoutStartSec=6h
+Nice=15
+IOSchedulingClass=idle
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+LockPersonality=true
+RestrictSUIDSGID=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# This service is NEVER enabled automatically. Review storage, credentials
+# and capacity first, then enable its matching timer for one named replica.
