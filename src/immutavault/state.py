@@ -410,7 +410,7 @@ class StateDB:
                 "SELECT finished_at,platform,vm_name,snapshot_id FROM jobs WHERE status='success' ORDER BY finished_at DESC LIMIT 1"
             ).fetchone()
             last_failure = conn.execute(
-                "SELECT finished_at,platform,vm_name,error FROM jobs WHERE status='failed' ORDER BY finished_at DESC LIMIT 1"
+                "SELECT finished_at,platform,vm_name,error,status FROM jobs WHERE status IN ('failed','degraded') ORDER BY finished_at DESC LIMIT 1"
             ).fetchone()
         return {
             "jobs": {str(r["status"]): int(r["count"]) for r in jobs},
