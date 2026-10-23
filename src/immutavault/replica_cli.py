@@ -8,7 +8,7 @@ import sys
 from .management_config import load_v11_config
 from .replica_verification import replica_copy_ready, verify_replica_restore
 
-COMMANDS = {"replica-verify", "replica-readiness"}
+COMMANDS = {"replica-verify", "replica-readiness", "replica-coverage"}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -20,6 +20,9 @@ def main(argv: list[str] | None = None) -> int:
     for subcmd in (verify, ready):
         subcmd.add_argument("--snapshot", required=True)
         subcmd.add_argument("--name", required=True, help="configured non-primary replica")
+    coverage = sub.add_parser("replica-coverage", help="list unverified or absent copies across recent recovery points")
+    coverage.add_argument("--limit", type=int, default=100)
+    coverage.add_argument("--platform")
     verify.add_argument("--actor", required=True)
     verify.add_argument("--execute-readback", action="store_true",
                         help="perform a potentially large temporary readback; no hypervisor changes")
@@ -27,6 +30,25 @@ def main(argv: list[str] | None = None) -> int:
     try:
         from .portal_v11_final import ManagedRecoveryEngine
         engine = ManagedRecoveryEngine(load_v11_config(args.config))
+        if args.command == "replica-coverage":
+            if not 1 <= args.limit <= 1000:
+                raise ValueError("limit must be from 1 to 1000")
+            rows = []
+            for point in engine.state.list_points(platform=args.platform, limit=args.limit):
+                for replica in engine.cfg.replicas:
+                    if not replica.enabled:
+                        continue
+                    copy = engine.state.get_recovery_copy(point["snapshot_id"], replica.name)
+                    status = replica_copy_ready(copy)
+                    rows.append({"vm": point["vm_name"], "platform": point["platform"],
+                                 "snapshot_id": point["snapshot_id"], "replica": replica.name,
+                                 "ready": bool(point.get("verified") and not point.get("suspicious") and status),
+                                 "copied": bool(copy and copy.get("status") == "success"),
+                                 "readback_verified": status})
+            healthy = bool(rows) and all(row["ready"] for row in rows)
+            print(json.dumps({"ready": healthy, "copy_count": len(rows), "copies": rows,
+                              "warning": "catalog proof only; test restores and object retention policies separately"}, indent=2))
+            return 0 if healthy else 1
         if args.command == "replica-verify":
             if not args.execute_readback:
                 print(json.dumps({"dry_run": True, "snapshot_id": args.snapshot,
