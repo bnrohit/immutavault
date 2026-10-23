@@ -84,6 +84,8 @@ def test_batch_creates_separate_idempotent_requests(monkeypatch, tmp_path):
         make_plan(), engine=engine, execute=True, requester="operator")
     assert result["status"] == "REQUESTED"
     assert len(result["created"]) == 3
+    assert len(result["requests"]) == 3
+    assert result["requests"][0] == {"source_vm_id": "vm-0", "request_id": 1}
     assert result["approval_to_execute"] is False
     assert result["hypervisor_changes"] is False
     again = create_migration_requests(
