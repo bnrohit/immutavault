@@ -47,10 +47,11 @@ def test_two_independent_storage_hosts_parallelize_without_bandwidth_magic():
     assert out["total_waves"] == 1
     assert len(out["waves"][0]["vms"]) == 2
     assert out["approved_to_execute"] is False
+    assert out["parallel_stage_execution_implemented"] is False
     # Data-transfer component stays exactly the same; only overlap of setup
     # overhead is modeled, never doubling network bandwidth.
-    assert 15 * 60 <= out["illustrative_saved_setup_seconds"] <= 15 * 60 + 1
-    assert out["estimated_wave_stage_seconds"] > 0
+    assert 15 * 60 <= out["hypothetical_overhead_savings_seconds"] <= 15 * 60 + 1
+    assert out["hypothetical_parallel_wave_seconds"] > 0
 
 
 def test_same_storage_serializes_even_on_different_hosts():
